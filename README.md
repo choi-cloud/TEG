@@ -35,12 +35,7 @@ Run the experiment:
 The current configuration runs:
 
 ```bash
-python -u main.py --dataset corafull --way 5 --shot 3 \
-    --meta_batch_size 5 \
-    --oracle \
-    --oracle_pool_size 10 \
-    --oracle_candidates 252 \
-    --oracle_eval_episodes 20
+python -u main.py --dataset corafull --way 5 --shot 3 > "${LOG_FILE}" 2>&1 &
 ```
 
 ## Logs
