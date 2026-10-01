@@ -31,6 +31,10 @@ def parse_args():
     parser.add_argument("--n_layers", type=int, default=2, help="# of EGNN layers")
     parser.add_argument("--anchor_size", type=int, default=16, help="# of virtual anchor nodes")
     parser.add_argument("--out_dir", type=str, default=None, help="dir to write run.json / episodes.jsonl (None: no files)")
+    parser.add_argument("--mem", action="store_true", help="enable relation memory (record / diagnose)")
+    parser.add_argument("--mem_k", type=int, default=10, help="# of retrieved memory entries")
+    parser.add_argument("--mem_tau", type=float, default=0.1, help="softmax temperature for retrieval weights")
+    parser.add_argument("--mem_chunk", type=int, default=256, help="# of query edges per retrieval chunk")
 
     return parser.parse_known_args()
 
@@ -76,6 +80,10 @@ def config2string(args):
             "n_layers",
             "anchor_size",
             "out_dir",
+            "mem",
+            "mem_k",
+            "mem_tau",
+            "mem_chunk",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_

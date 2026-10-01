@@ -10,7 +10,11 @@ import torch
 import os
 import json
 import time
+from sklearn.metrics import roc_auc_score
+from memory import RelationMemory
 from argument import config2string, parse_args
+
+MEM_EP_KEYS = ["n_edges", "auc_phat", "auc_dist", "mean_phat_same", "mean_phat_diff", "mean_top1_sim"]
 
 
 class teg_trainer(embedder):
@@ -23,6 +27,59 @@ class teg_trainer(embedder):
 
         self.config_str = config2string(args)
         self.set_seed = set_seed
+
+        if args.mem:
+            self.memory = RelationMemory(args.mem_k, args.mem_tau, args.mem_chunk, self.device)
+            self.labels_np = self.labels.cpu().numpy()
+
+    def mem_record(self, id_support, id_query):
+        # (q <- s) and (s <- q) for every query-support pair; base labels only
+        for q in id_query:
+            for s in id_support:
+                same = int(self.labels_np[q] == self.labels_np[s])
+                self.memory.add(q, s, same)
+                self.memory.add(s, q, same)
+
+    def mem_diag(self, embeds_epi, epi_str, edge_index, gids):
+        # first-layer messages of this episode, computed as in EGNN.forward (LayerNorm -> coord2dist -> msg_model)
+        row, col = edge_index
+        x = self.egnn.LayerNorm(embeds_epi)
+        sqr_dist, _ = self.egnn.gcl_0.coord2dist(edge_index, x)
+        msg = self.egnn.gcl_0.msg_model(epi_str[row], epi_str[col], sqr_dist)
+        res = self.memory.query(msg)
+        lab = self.labels_np[gids]
+        same = (lab[row.cpu().numpy()] == lab[col.cpu().numpy()]).astype(int)
+        res["msg"] = msg
+        res["same"] = same
+        res["neg_dist"] = (-sqr_dist.squeeze(1)).cpu().numpy()
+        return res
+
+    @staticmethod
+    def mem_stats(p_hat, neg_dist, same, top1_sim):
+        both = 0 < same.sum() < len(same)
+        return {
+            "n_edges": int(len(same)),
+            "auc_phat": float(roc_auc_score(same, p_hat)) if both else None,
+            "auc_dist": float(roc_auc_score(same, neg_dist)) if both else None,
+            "mean_phat_same": float(p_hat[same == 1].mean()) if (same == 1).any() else None,
+            "mean_phat_diff": float(p_hat[same == 0].mean()) if (same == 0).any() else None,
+            "mean_top1_sim": float(top1_sim.mean()),
+        }
+
+    def mem_sanity_check(self):
+        # one training episode of epoch 1 (its pairs are in memory), queried right after build
+        id_support, id_query, ep_idx = self.sanity_ids
+        n_s, n_q = len(id_support), len(id_query)
+        edge1 = torch.LongTensor([i for i in range(n_s, n_s + n_q) for _ in range(n_s)])
+        edge2 = torch.LongTensor(list(range(n_s)) * n_q)
+        edge_index = torch.stack((torch.cat([edge1, edge2]), torch.cat([edge2, edge1]))).to(self.device)
+        self.conv.eval()
+        self.egnn.eval()
+        emb = self.conv(self.features, self.edges)
+        gids = np.concatenate([id_support, id_query])
+        res = self.mem_diag(emb[gids], self.structural_features[gids], edge_index, gids)
+        stats = self.mem_stats(res["p_hat"].cpu().numpy(), res["neg_dist"], res["same"], res["top1_sim"].cpu().numpy())
+        return {"epoch": 1, "train_ep_idx": int(ep_idx), "n_edges": stats["n_edges"], "auc_phat": stats["auc_phat"], "top1_sim_mean": stats["mean_top1_sim"]}
 
     def train_epoch(self, mode, n_episode, epoch):
 
@@ -100,6 +157,25 @@ class teg_trainer(embedder):
             edge2_bi = torch.cat([edge2, edge1])
             edge_index = torch.stack((edge1_bi, edge2_bi)).to(self.device)
 
+            # ______________________________________________
+            # Relation memory (record / diagnose, no effect on the model)
+            mem_ep = None
+            if self.args.mem and epoch >= 1:
+                if mode == "train":
+                    self.mem_record(id_support, id_query)
+                    if epoch == 1:
+                        self.sanity_ids = (id_support, id_query, episode)
+                else:
+                    gids = np.concatenate([id_support, id_query])
+                    res = self.mem_diag(embeds_epi, epi_str, edge_index, gids)
+                    p_hat = res["p_hat"].cpu().numpy()
+                    top1 = res["top1_sim"].cpu().numpy()
+                    mem_ep = self.mem_stats(p_hat, res["neg_dist"], res["same"], top1)
+                    if mode == "test":
+                        self.mem_pool["p_hat"].append(p_hat)
+                        self.mem_pool["neg_dist"].append(res["neg_dist"])
+                        self.mem_pool["same"].append(res["same"])
+
             # ______________________
             # EGNN - Task adaptation
             epi_str, embeds_epi = self.egnn(epi_str, embeds_epi, edge_index)
@@ -161,6 +237,8 @@ class teg_trainer(embedder):
                         "f1": float(f1_score),
                     }
                 )
+                if self.args.mem:
+                    self.episode_records[-1].update(mem_ep if mem_ep is not None else dict.fromkeys(MEM_EP_KEYS))
 
         acc_total_epoch = sum(acc_epoch) / len(acc_epoch)
         f1_total_epoch = sum(f1_epoch) / len(f1_epoch)
@@ -193,12 +271,21 @@ class teg_trainer(embedder):
         start_time = time.time()
         self.epoch_records = []
         self.episode_records = []
+        self.mem_sanity = None
 
         for epoch in tqdm(range(self.args.epochs + 1)):
 
             acc_train, f1_train = self.train_epoch("train", self.args.episodes, epoch)
 
             with torch.no_grad():
+
+                if self.args.mem:
+                    self.mem_pool = {"p_hat": [], "neg_dist": [], "same": []}
+                    if epoch >= 1:
+                        self.memory.build(self.conv, self.egnn, self.features, self.edges, self.structural_features)
+                        if epoch == 1:
+                            self.mem_sanity = self.mem_sanity_check()
+                            tqdm.write(f"# mem sanity : {self.mem_sanity}")
 
                 acc_valid, f1_valid = self.train_epoch("valid", self.args.meta_val_num, epoch)
 
@@ -215,6 +302,13 @@ class teg_trainer(embedder):
                     "test_f1": float(f1_test),
                 }
             )
+            if self.args.mem:
+                pooled = {"mem_size": len(self.memory), "auc_phat_pooled": None, "auc_dist_pooled": None}
+                if self.mem_pool["same"]:
+                    same = np.concatenate(self.mem_pool["same"])
+                    pooled["auc_phat_pooled"] = float(roc_auc_score(same, np.concatenate(self.mem_pool["p_hat"])))
+                    pooled["auc_dist_pooled"] = float(roc_auc_score(same, np.concatenate(self.mem_pool["neg_dist"])))
+                self.epoch_records[-1].update(pooled)
 
             if best_acc_train < acc_train:
                 best_acc_train = acc_train
@@ -261,7 +355,8 @@ class teg_trainer(embedder):
             os.makedirs(self.args.out_dir, exist_ok=True)
             with open(os.path.join(self.args.out_dir, "run.json"), "w") as f:
                 json.dump(
-                    {"config": vars(self.args), "epochs": self.epoch_records, "final": final, "wall_time_sec": time.time() - start_time},
+                    {"config": vars(self.args), "epochs": self.epoch_records, "final": final, "wall_time_sec": time.time() - start_time}
+                    | ({"sanity": self.mem_sanity} if self.args.mem else {}),
                     f,
                     indent=2,
                 )
