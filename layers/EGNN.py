@@ -18,9 +18,12 @@ class EGCL(nn.Module):
 
         return out
 
-    def coord_model(self, x, edge_index, coord_diff, msg):
+    def coord_model(self, x, edge_index, coord_diff, msg, w_fn=None):
         row, col = edge_index
-        trans = coord_diff * self.trans_mlp(msg)
+        w = self.trans_mlp(msg)
+        if w_fn is not None:
+            w = w_fn(w)
+        trans = coord_diff * w
         trans = diff_mean(trans, row, num_nodes=x.size(0))
         x = x + trans
 
@@ -42,11 +45,13 @@ class EGCL(nn.Module):
 
         return sqr_dist, coord_diff
 
-    def forward(self, edge_index, str_feature, coord_feature):
+    def forward(self, edge_index, str_feature, coord_feature, msg_fn=None, w_fn=None):
         row, col = edge_index
         sqr_dist, coord_diff = self.coord2dist(edge_index, coord_feature)
         msg = self.msg_model(str_feature[row], str_feature[col], sqr_dist)
-        coord_feature = self.coord_model(coord_feature, edge_index, coord_diff, msg)
+        if msg_fn is not None:
+            msg = msg_fn(msg)
+        coord_feature = self.coord_model(coord_feature, edge_index, coord_diff, msg, w_fn)
         str_feature = self.posi_model(str_feature, edge_index, msg)
 
         return str_feature, coord_feature
@@ -60,11 +65,15 @@ class EGNN(nn.Module):
         self.n_layers = n_layers
         self.LayerNorm = nn.LayerNorm(in_dim)
 
-    def forward(self, str_feature, coord_feature, edge_index):  # h = hiddin
+    def forward(self, str_feature, coord_feature, edge_index, msg_fn=None, w_fn=None):  # h = hiddin
 
         coord_feature = self.LayerNorm(coord_feature)
         for i in range(0, self.n_layers):
-            str_feature, coord_feature = self._modules["gcl_%d" % i](edge_index, str_feature, coord_feature)
+            if i == 0:
+                # msg_fn / w_fn act on the first layer only
+                str_feature, coord_feature = self._modules["gcl_%d" % i](edge_index, str_feature, coord_feature, msg_fn, w_fn)
+            else:
+                str_feature, coord_feature = self._modules["gcl_%d" % i](edge_index, str_feature, coord_feature)
 
         return str_feature, coord_feature
 

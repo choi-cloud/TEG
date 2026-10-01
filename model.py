@@ -14,6 +14,7 @@ from sklearn.metrics import roc_auc_score
 from memory import RelationMemory
 from argument import config2string, parse_args
 
+MEM_ARMS = [("A_0.1", "A", 0.1), ("A_0.3", "A", 0.3), ("A_0.5", "A", 0.5), ("B_0.1", "B", 0.1), ("B_0.3", "B", 0.3), ("B_0.5", "B", 0.5)]
 MEM_EP_KEYS = ["n_edges", "auc_phat", "auc_dist", "mean_phat_same", "mean_phat_diff", "mean_top1_sim"]
 
 
@@ -66,6 +67,68 @@ class teg_trainer(embedder):
             "mean_top1_sim": float(top1_sim.mean()),
         }
 
+    def episode_forward(self, epi_str, embeds_epi, edge_index, n_support, msg_fn=None, w_fn=None):
+        # ______________________
+        # EGNN - Task adaptation
+        epi_str, embeds_epi = self.egnn(epi_str, embeds_epi, edge_index, msg_fn, w_fn)
+
+        # __________
+        # Prototypes
+        embeds_spt = embeds_epi[:n_support, :]
+        embeds_qry = embeds_epi[n_support:, :]
+
+        embeds_spt = embeds_spt.view([self.n_way, self.k_shot, embeds_spt.shape[1]])
+
+        embeds_proto = embeds_spt.mean(1)
+
+        # __________
+        # Prediction
+        dists_output = euclidean_dist(embeds_qry, embeds_proto)
+        output = F.log_softmax(-dists_output, dim=1)
+        output_softmax = F.softmax(-dists_output, dim=1)
+
+        return output, output_softmax
+
+    def arm_fns(self, name, kind, beta, mem_res):
+        if kind == "A":
+            # v_bar: retrieval-weighted mean of stored raw memory messages
+            v_bar = (mem_res["w"].unsqueeze(2) * self.memory.msgs[mem_res["idx"]]).sum(1)
+            return (lambda m: (1 - beta) * m + beta * v_bar), None
+
+        p_hat = mem_res["p_hat"].unsqueeze(1)
+
+        def w_fn(w):
+            sigma = w.std()
+            if sigma.item() < 1e-8:
+                self.sigma_skip[name] += 1
+                return w
+            return w - beta * sigma * (2 * p_hat - 1)
+
+        return None, w_fn
+
+    def arm_beta0_check(self, epi_str, embeds_epi, edge_index, n_support, mem_res, off_softmax, label_list, off_acc):
+        out = {"off_acc": float(off_acc)}
+        for kind in ("A", "B"):
+            msg_fn, w_fn = self.arm_fns(f"{kind}_0.0", kind, 0.0, mem_res)
+            _, sm = self.episode_forward(epi_str, embeds_epi, edge_index, n_support, msg_fn, w_fn)
+            out[f"{kind}_0.0_acc"] = float(accuracy(sm.cpu().detach(), label_list))
+            out[f"{kind}_0.0_max_abs_diff_softmax"] = float((sm - off_softmax).abs().max())
+        return out
+
+    def mem_configs(self):
+        # TEG rule per config: best valid by strict '<', test taken whenever valid equals the best (later epoch wins ties)
+        configs = {}
+        for name in ["off"] + [a[0] for a in MEM_ARMS]:
+            best_valid, best_epoch, test_at_best = 0, 0, None
+            for rec in self.epoch_records:
+                v, t = rec["arm_valid_acc"][name], rec["arm_test_acc"][name]
+                if best_valid < v:
+                    best_valid, best_epoch = v, rec["epoch"]
+                if v == best_valid:
+                    test_at_best = t
+            configs[name] = {"best_valid_epoch": best_epoch, "best_valid_acc": best_valid, "test_acc_at_best_valid": test_at_best}
+        return configs
+
     def mem_sanity_check(self):
         # one training episode of epoch 1 (its pairs are in memory), queried right after build
         id_support, id_query, ep_idx = self.sanity_ids
@@ -102,6 +165,7 @@ class teg_trainer(embedder):
 
         acc_epoch = []
         f1_epoch = []
+        self.arm_scores = {name: [] for name in ["off"] + [a[0] for a in MEM_ARMS]}
 
         for episode in range(n_episode):
 
@@ -171,29 +235,15 @@ class teg_trainer(embedder):
                     p_hat = res["p_hat"].cpu().numpy()
                     top1 = res["top1_sim"].cpu().numpy()
                     mem_ep = self.mem_stats(p_hat, res["neg_dist"], res["same"], top1)
+                    mem_res = res
                     if mode == "test":
                         self.mem_pool["p_hat"].append(p_hat)
                         self.mem_pool["neg_dist"].append(res["neg_dist"])
                         self.mem_pool["same"].append(res["same"])
 
-            # ______________________
-            # EGNN - Task adaptation
-            epi_str, embeds_epi = self.egnn(epi_str, embeds_epi, edge_index)
-
-            # __________
-            # Prototypes
-            embeds_spt = embeds_epi[: len(id_support), :]
-            embeds_qry = embeds_epi[len(id_support) :, :]
-
-            embeds_spt = embeds_spt.view([self.n_way, self.k_shot, embeds_spt.shape[1]])
-
-            embeds_proto = embeds_spt.mean(1)
-
-            # __________
-            # Prediction
-            dists_output = euclidean_dist(embeds_qry, embeds_proto)
-            output = F.log_softmax(-dists_output, dim=1)
-            output_softmax = F.softmax(-dists_output, dim=1)
+            # _____________________________________
+            # EGNN -> Prototypes -> Prediction (off)
+            output, output_softmax = self.episode_forward(epi_str, embeds_epi, edge_index, len(id_support))
 
             # _________________________
             # Relabeling for meta-tasks
@@ -226,6 +276,22 @@ class teg_trainer(embedder):
             acc_epoch.append(acc_score)
             f1_epoch.append(f1_score)
 
+            # ________________________________________________________
+            # Memory arms on the same episode (no new sampling / RNG)
+            if self.args.mem and (mode == "valid" or mode == "test"):
+                arm_acc = {"off": acc_score}
+                for name, kind, beta in MEM_ARMS:
+                    if epoch >= 1:
+                        msg_fn, w_fn = self.arm_fns(name, kind, beta, mem_res)
+                        _, arm_softmax = self.episode_forward(epi_str, embeds_epi, edge_index, len(id_support), msg_fn, w_fn)
+                        arm_acc[name] = accuracy(arm_softmax.cpu().detach(), label_list)
+                    else:
+                        arm_acc[name] = acc_score  # epoch 0: memory is empty
+                for name in arm_acc:
+                    self.arm_scores[name].append(arm_acc[name])
+                if epoch == 1 and mode == "test" and self.beta0_check is None:
+                    self.beta0_check = self.arm_beta0_check(epi_str, embeds_epi, edge_index, len(id_support), mem_res, output_softmax, label_list, acc_score)
+
             if mode == "valid" or mode == "test":
                 self.episode_records.append(
                     {
@@ -239,9 +305,13 @@ class teg_trainer(embedder):
                 )
                 if self.args.mem:
                     self.episode_records[-1].update(mem_ep if mem_ep is not None else dict.fromkeys(MEM_EP_KEYS))
+                    self.episode_records[-1]["arm_acc"] = {k: float(v) for k, v in arm_acc.items()}
 
         acc_total_epoch = sum(acc_epoch) / len(acc_epoch)
         f1_total_epoch = sum(f1_epoch) / len(f1_epoch)
+
+        if self.args.mem and (mode == "valid" or mode == "test"):
+            self.arm_epoch[mode] = {k: float(sum(v) / len(v)) for k, v in self.arm_scores.items()}
 
         if mode == "train":
             tqdm.write(f"acc_train : {acc_total_epoch:.4f}")
@@ -272,6 +342,10 @@ class teg_trainer(embedder):
         self.epoch_records = []
         self.episode_records = []
         self.mem_sanity = None
+        self.beta0_check = None
+        self.arm_epoch = {}
+        self.sigma_skip = {name: 0 for name, kind, _ in MEM_ARMS if kind == "B"}
+        self.sigma_skip["B_0.0"] = 0
 
         for epoch in tqdm(range(self.args.epochs + 1)):
 
@@ -309,6 +383,8 @@ class teg_trainer(embedder):
                     pooled["auc_phat_pooled"] = float(roc_auc_score(same, np.concatenate(self.mem_pool["p_hat"])))
                     pooled["auc_dist_pooled"] = float(roc_auc_score(same, np.concatenate(self.mem_pool["neg_dist"])))
                 self.epoch_records[-1].update(pooled)
+                self.epoch_records[-1]["arm_valid_acc"] = self.arm_epoch["valid"]
+                self.epoch_records[-1]["arm_test_acc"] = self.arm_epoch["test"]
 
             if best_acc_train < acc_train:
                 best_acc_train = acc_train
@@ -356,7 +432,16 @@ class teg_trainer(embedder):
             with open(os.path.join(self.args.out_dir, "run.json"), "w") as f:
                 json.dump(
                     {"config": vars(self.args), "epochs": self.epoch_records, "final": final, "wall_time_sec": time.time() - start_time}
-                    | ({"sanity": self.mem_sanity} if self.args.mem else {}),
+                    | (
+                        {
+                            "sanity": self.mem_sanity,
+                            "mem_configs": self.mem_configs(),
+                            "sigma_skip": self.sigma_skip,
+                            "beta0_check": self.beta0_check,
+                        }
+                        if self.args.mem
+                        else {}
+                    ),
                     f,
                     indent=2,
                 )
