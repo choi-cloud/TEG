@@ -7,6 +7,9 @@ from utils import *
 from torch import optim
 import torch.nn.functional as F
 import torch
+import os
+import json
+import time
 from argument import config2string, parse_args
 
 
@@ -147,6 +150,18 @@ class teg_trainer(embedder):
             acc_epoch.append(acc_score)
             f1_epoch.append(f1_score)
 
+            if mode == "valid" or mode == "test":
+                self.episode_records.append(
+                    {
+                        "epoch": epoch,
+                        "mode": mode,
+                        "ep_idx": episode,
+                        "classes": [c.item() if hasattr(c, "item") else c for c in class_selected],
+                        "acc": float(acc_score),
+                        "f1": float(f1_score),
+                    }
+                )
+
         acc_total_epoch = sum(acc_epoch) / len(acc_epoch)
         f1_total_epoch = sum(f1_epoch) / len(f1_epoch)
 
@@ -175,6 +190,10 @@ class teg_trainer(embedder):
         best_f1_test = 0
         best_epoch_test = 0
 
+        start_time = time.time()
+        self.epoch_records = []
+        self.episode_records = []
+
         for epoch in tqdm(range(self.args.epochs + 1)):
 
             acc_train, f1_train = self.train_epoch("train", self.args.episodes, epoch)
@@ -184,6 +203,18 @@ class teg_trainer(embedder):
                 acc_valid, f1_valid = self.train_epoch("valid", self.args.meta_val_num, epoch)
 
                 acc_test, f1_test = self.train_epoch("test", self.args.meta_test_num, epoch)
+
+            self.epoch_records.append(
+                {
+                    "epoch": epoch,
+                    "train_acc": float(acc_train),
+                    "train_f1": float(f1_train),
+                    "valid_acc": float(acc_valid),
+                    "valid_f1": float(f1_valid),
+                    "test_acc": float(acc_test),
+                    "test_f1": float(f1_test),
+                }
+            )
 
             if best_acc_train < acc_train:
                 best_acc_train = acc_train
@@ -211,6 +242,32 @@ class teg_trainer(embedder):
             tqdm.write(f"# Test_At_Best_Valid : {test_acc_at_best_valid:.4f}, F1 : {test_f1_at_best_valid:.4f} at {best_epoch_valid} epoch\n")
 
         np.set_printoptions(formatter={"float_kind": lambda x: "{0:0.4f}".format(x)})
+
+        if self.args.out_dir is not None:
+            final = {
+                "best_acc_train": best_acc_train,
+                "best_f1_train": best_f1_train,
+                "best_epoch_train": best_epoch_train,
+                "best_acc_valid": best_acc_valid,
+                "best_f1_valid": best_f1_valid,
+                "best_epoch_valid": best_epoch_valid,
+                "best_acc_test": best_acc_test,
+                "best_f1_test": best_f1_test,
+                "best_epoch_test": best_epoch_test,
+                "test_acc_at_best_valid": test_acc_at_best_valid,
+                "test_f1_at_best_valid": test_f1_at_best_valid,
+            }
+            final = {k: (int(v) if k.startswith("best_epoch") else float(v)) for k, v in final.items()}
+            os.makedirs(self.args.out_dir, exist_ok=True)
+            with open(os.path.join(self.args.out_dir, "run.json"), "w") as f:
+                json.dump(
+                    {"config": vars(self.args), "epochs": self.epoch_records, "final": final, "wall_time_sec": time.time() - start_time},
+                    f,
+                    indent=2,
+                )
+            with open(os.path.join(self.args.out_dir, "episodes.jsonl"), "w") as f:
+                for rec in self.episode_records:
+                    f.write(json.dumps(rec) + "\n")
 
         return (
             best_acc_train,

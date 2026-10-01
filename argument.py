@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--gamma", type=float, default=0.5, help="loss weight coefficient")
     parser.add_argument("--n_layers", type=int, default=2, help="# of EGNN layers")
     parser.add_argument("--anchor_size", type=int, default=16, help="# of virtual anchor nodes")
+    parser.add_argument("--out_dir", type=str, default=None, help="dir to write run.json / episodes.jsonl (None: no files)")
 
     return parser.parse_known_args()
 
@@ -74,6 +75,7 @@ def config2string(args):
             "final_result",
             "n_layers",
             "anchor_size",
+            "out_dir",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_
