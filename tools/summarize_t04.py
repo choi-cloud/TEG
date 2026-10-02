@@ -90,6 +90,29 @@ def main():
             L.append(f"| {ds} | {k} | " + " | ".join(cells) + " |")
     L.append("")
 
+    # Table 1b: one beta per arm, chosen by the mean over the 6 (dataset, shot) rows of mean d
+    def test_acc(c, ds, k):
+        return [runs[(ds, k, s)][0]["mem_configs"][c]["test_acc_at_best_valid"] for s in seeds]
+
+    rows = [(ds, k) for ds in DATASETS for k in SHOTS]
+    avg_d = {c: sum(paired(test_acc(c, ds, k), test_acc("off", ds, k))[0] for ds, k in rows) / len(rows) for c in CONFIGS[1:]}
+    best = {arm: max(names, key=lambda n: (avg_d[n], -names.index(n))) for arm, names in SEL.items()}
+    L.append("## 표 1b — 설정별 대표 β (off / A-* / B-*)")
+    L.append("arm마다 β 3개 중 \"6개 (데이터셋, shot)의 mean d 평균\"이 가장 큰 β를 하나 고른다(동점이면 작은 β). "
+             "**test 결과로 고른 사후 선택**이다(seed별 valid 선택은 표 2).")
+    L.append("")
+    L.append("| β | " + " | ".join(CONFIGS[1:]) + " |")
+    L.append("|---|" + "---|" * (len(CONFIGS) - 1))
+    L.append("| 6행 평균 mean d (%p) | " + " | ".join(f"{avg_d[c]:+.3f}" for c in CONFIGS[1:]) + " |")
+    L.append("")
+    L.append(f"| 데이터셋 | shot | off | A-* ({best['A_sel']}) | B-* ({best['B_sel']}) |")
+    L.append("|---|---|---|---|---|")
+    for ds, k in rows:
+        off = test_acc("off", ds, k)
+        cells = [f"{100 * sum(off) / len(off):.2f}"] + [fmt_cell(test_acc(best[arm], ds, k), off)[0] for arm in SEL]
+        L.append(f"| {ds} | {k} | " + " | ".join(cells) + " |")
+    L.append("")
+
     # Table 2
     L.append("## 표 2 — valid로 고른 β (A_sel, B_sel)")
     L.append("seed마다 해당 arm의 β 3개 중 `best_valid_acc`가 가장 높은 β를 고르고(동점이면 작은 β), 그 β의 `test_acc_at_best_valid`를 쓴다.")
