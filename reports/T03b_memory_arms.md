@@ -21,7 +21,7 @@
 
 설정 7개 × {best_valid_epoch, test_acc_at_best_valid}:
 
-| 설정 | A 5w1s epoch | A 5w1s test_acc_at_best_valid | B 5w5s epoch | B 5w5s test_acc_at_best_valid |
+| 설정 | run A 5w1s epoch | run A 5w1s test_acc_at_best_valid | run B 5w5s epoch | run B 5w5s test_acc_at_best_valid |
 |---|---|---|---|---|
 | off | 7 | 0.8048 | 7 | 0.9008 |
 | A_0.1 | 7 | 0.8048 | 7 | 0.9008 |
@@ -70,3 +70,22 @@
 3. B의 σ는 그 에피소드 첫 층 `w` 전체 원소의 `torch.std`(불편 추정, 보정 전 메시지 기준)로 계산했다(지시서에 추정 방식 미기재 — 가장 단순한 쪽).
 4. 진단용 원본 worktree를 scratchpad(`…/scratchpad/wt_t01`, detached `19e54f6`)에 만들었다. `git worktree list`에 남아 있다. 첫 진단 시도 4 run은 dataset 링크 오류(`FileNotFoundError`)로 실패했고, 재실행 로그는 `_retry1` 이름으로 저장했다(덮어쓰기 없음).
 5. A 설정의 에폭별 test 정확도가 off와 같은 에폭이 다수다(표는 `results/T03b/*/run.json` `arm_test_acc`).
+
+## 부기 (2026-10-02 10:21 KST) — 게이트 (a) 재정의와 통과 처리
+사람 지시로 게이트 (a)를 재정의했다. 위 본문은 수정하지 않았다.
+
+- **재정의**
+  - 1-shot: T03a 같은 run과 완전 일치를 유지한다.
+  - 5-shot: 원본 코드 반복 실행 간 차이 범위 안이면 통과한다.
+- **5-shot 판정 방식**
+  - 비교 대상은 off 설정의 에폭별 valid/test 정확도 22개다.
+  - max|T03b − T03a|가 원본 코드(`t01`) 반복 4 run(`results/T03b/diag_orig/*_retry1.log`)의 쌍별(6쌍) 최대 |차|보다 크지 않으면 통과다.
+
+| 항목 | 값 | 결과 |
+|---|---|---|
+| 1-shot: off valid/test 22개 vs T03a | 완전 일치 | 통과 |
+| 5-shot: 원본 4 run 쌍별 최대 \|차\| (22개 값) | 0.0024 | — |
+| 5-shot: T03b off vs T03a 최대 \|차\| | 0.0008 | 통과 (≤ 0.0024) |
+| 참고: 값별 원본 4 run 최소~최대 구간 안 | T03b 아님, T03a도 아님 | 판정에 사용하지 않음 |
+
+- 게이트 (a)·(b)·(c) 모두 통과로 처리한다. 태그 `t03b`.
