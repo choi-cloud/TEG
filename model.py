@@ -32,6 +32,9 @@ class teg_trainer(embedder):
         if args.mem:
             self.memory = RelationMemory(args.mem_k, args.mem_tau, args.mem_chunk, self.device)
             self.labels_np = self.labels.cpu().numpy()
+            self.mem_keys = args.mem_keys.split(",")
+            assert set(self.mem_keys) <= {"raw", "center", "str"}, args.mem_keys
+            self.mem_arms = MEM_ARMS if args.mem_arms == "all" else []
 
     def mem_record(self, id_support, id_query):
         # (q <- s) and (s <- q) for every query-support pair; base labels only
@@ -53,6 +56,8 @@ class teg_trainer(embedder):
         res["msg"] = msg
         res["same"] = same
         res["neg_dist"] = (-sqr_dist.squeeze(1)).cpu().numpy()
+        s_edges = torch.cat([epi_str[row], epi_str[col]], dim=1)
+        res["by_key"] = {key: (res if key == "raw" else self.memory.query(msg, key, s_edges)) for key in self.mem_keys}
         return res
 
     @staticmethod
@@ -71,6 +76,7 @@ class teg_trainer(embedder):
         # ______________________
         # EGNN - Task adaptation
         epi_str, embeds_epi = self.egnn(epi_str, embeds_epi, edge_index, msg_fn, w_fn)
+        self.last_final_coords = embeds_epi  # read-only tap for d_final (T05)
 
         # __________
         # Prototypes
@@ -118,7 +124,7 @@ class teg_trainer(embedder):
     def mem_configs(self):
         # TEG rule per config: best valid by strict '<', test taken whenever valid equals the best (later epoch wins ties)
         configs = {}
-        for name in ["off"] + [a[0] for a in MEM_ARMS]:
+        for name in ["off"] + [a[0] for a in self.mem_arms]:
             best_valid, best_epoch, test_at_best = 0, 0, None
             for rec in self.epoch_records:
                 v, t = rec["arm_valid_acc"][name], rec["arm_test_acc"][name]
@@ -165,7 +171,7 @@ class teg_trainer(embedder):
 
         acc_epoch = []
         f1_epoch = []
-        self.arm_scores = {name: [] for name in ["off"] + [a[0] for a in MEM_ARMS]}
+        self.arm_scores = {name: [] for name in ["off"] + [a[0] for a in (self.mem_arms if self.args.mem else [])]}
 
         for episode in range(n_episode):
 
@@ -245,6 +251,29 @@ class teg_trainer(embedder):
             # EGNN -> Prototypes -> Prediction (off)
             output, output_softmax = self.episode_forward(epi_str, embeds_epi, edge_index, len(id_support))
 
+            if self.args.mem and epoch >= 1 and mode == "test":
+                # TEG final-coordinate pair distance on the task graph edges (r <- c), read from the off output
+                z = self.last_final_coords
+                d_final = torch.sum((z[edge_index[0]] - z[edge_index[1]]) ** 2, 1).cpu().numpy()
+                self.mem_pool["d_final"].append(d_final)
+                for key, kres in mem_res["by_key"].items():
+                    self.mem_pool["phat_" + key].append(kres["p_hat"].cpu().numpy())
+                if self.args.dump_edges:
+                    n_e = len(d_final)
+                    dump = {
+                        "epoch": np.full(n_e, epoch, dtype=np.int16),
+                        "ep_idx": np.full(n_e, episode, dtype=np.int16),
+                        "dir": np.repeat(np.array([0, 1], dtype=np.int8), n_e // 2),
+                        "same": mem_res["same"].astype(np.int8),
+                        "d0": -mem_res["neg_dist"],
+                        "d_final": d_final,
+                    }
+                    for key, kres in mem_res["by_key"].items():
+                        dump["phat_" + key] = kres["p_hat"].cpu().numpy()
+                        dump["top1_" + key] = kres["top1_sim"].cpu().numpy()
+                        dump["top10_" + key] = kres["topk_last_sim"].cpu().numpy()
+                    self.edge_dump.append(dump)
+
             # _________________________
             # Relabeling for meta-tasks
             label_list = torch.LongTensor([class_selected.index(i) for i in self.labels[id_query]]).to(self.device)
@@ -280,7 +309,7 @@ class teg_trainer(embedder):
             # Memory arms on the same episode (no new sampling / RNG)
             if self.args.mem and (mode == "valid" or mode == "test"):
                 arm_acc = {"off": acc_score}
-                for name, kind, beta in MEM_ARMS:
+                for name, kind, beta in self.mem_arms:
                     if epoch >= 1:
                         msg_fn, w_fn = self.arm_fns(name, kind, beta, mem_res)
                         _, arm_softmax = self.episode_forward(epi_str, embeds_epi, edge_index, len(id_support), msg_fn, w_fn)
@@ -289,7 +318,7 @@ class teg_trainer(embedder):
                         arm_acc[name] = acc_score  # epoch 0: memory is empty
                 for name in arm_acc:
                     self.arm_scores[name].append(arm_acc[name])
-                if epoch == 1 and mode == "test" and self.beta0_check is None:
+                if epoch == 1 and mode == "test" and self.beta0_check is None and self.mem_arms:
                     self.beta0_check = self.arm_beta0_check(epi_str, embeds_epi, edge_index, len(id_support), mem_res, output_softmax, label_list, acc_score)
 
             if mode == "valid" or mode == "test":
@@ -346,6 +375,7 @@ class teg_trainer(embedder):
         self.arm_epoch = {}
         self.sigma_skip = {name: 0 for name, kind, _ in MEM_ARMS if kind == "B"}
         self.sigma_skip["B_0.0"] = 0
+        self.edge_dump = []
 
         for epoch in tqdm(range(self.args.epochs + 1)):
 
@@ -354,9 +384,10 @@ class teg_trainer(embedder):
             with torch.no_grad():
 
                 if self.args.mem:
-                    self.mem_pool = {"p_hat": [], "neg_dist": [], "same": []}
+                    self.mem_pool = {"p_hat": [], "neg_dist": [], "same": [], "d_final": []}
+                    self.mem_pool.update({"phat_" + key: [] for key in self.mem_keys})
                     if epoch >= 1:
-                        self.memory.build(self.conv, self.egnn, self.features, self.edges, self.structural_features)
+                        self.memory.build(self.conv, self.egnn, self.features, self.edges, self.structural_features, self.mem_keys)
                         if epoch == 1:
                             self.mem_sanity = self.mem_sanity_check()
                             tqdm.write(f"# mem sanity : {self.mem_sanity}")
@@ -378,10 +409,14 @@ class teg_trainer(embedder):
             )
             if self.args.mem:
                 pooled = {"mem_size": len(self.memory), "auc_phat_pooled": None, "auc_dist_pooled": None}
+                pooled.update({"auc_phat_pooled_" + key: None for key in self.mem_keys} | {"auc_dfinal_pooled": None})
                 if self.mem_pool["same"]:
                     same = np.concatenate(self.mem_pool["same"])
                     pooled["auc_phat_pooled"] = float(roc_auc_score(same, np.concatenate(self.mem_pool["p_hat"])))
                     pooled["auc_dist_pooled"] = float(roc_auc_score(same, np.concatenate(self.mem_pool["neg_dist"])))
+                    for key in self.mem_keys:
+                        pooled["auc_phat_pooled_" + key] = float(roc_auc_score(same, np.concatenate(self.mem_pool["phat_" + key])))
+                    pooled["auc_dfinal_pooled"] = float(roc_auc_score(same, -np.concatenate(self.mem_pool["d_final"])))
                 self.epoch_records[-1].update(pooled)
                 self.epoch_records[-1]["arm_valid_acc"] = self.arm_epoch["valid"]
                 self.epoch_records[-1]["arm_test_acc"] = self.arm_epoch["test"]
@@ -448,6 +483,11 @@ class teg_trainer(embedder):
             with open(os.path.join(self.args.out_dir, "episodes.jsonl"), "w") as f:
                 for rec in self.episode_records:
                     f.write(json.dumps(rec) + "\n")
+            if self.args.mem and self.args.dump_edges:
+                np.savez_compressed(
+                    os.path.join(self.args.out_dir, "edges_test.npz"),
+                    **{k: np.concatenate([d[k] for d in self.edge_dump]) for k in self.edge_dump[0]},
+                )
 
         return (
             best_acc_train,

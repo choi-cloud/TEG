@@ -35,6 +35,9 @@ def parse_args():
     parser.add_argument("--mem_k", type=int, default=10, help="# of retrieved memory entries")
     parser.add_argument("--mem_tau", type=float, default=0.1, help="softmax temperature for retrieval weights")
     parser.add_argument("--mem_chunk", type=int, default=256, help="# of query edges per retrieval chunk")
+    parser.add_argument("--mem_keys", type=str, default="raw", help="comma-separated memory key kinds: raw,center,str")
+    parser.add_argument("--mem_arms", type=str, default="all", choices=["all", "none"], help="evaluate correction arms A/B")
+    parser.add_argument("--dump_edges", action="store_true", help="dump per-edge test diagnostics to out_dir/edges_test.npz")
 
     return parser.parse_known_args()
 
@@ -84,6 +87,9 @@ def config2string(args):
             "mem_k",
             "mem_tau",
             "mem_chunk",
+            "mem_keys",
+            "mem_arms",
+            "dump_edges",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_
