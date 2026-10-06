@@ -114,3 +114,8 @@
 8. T04 대비 `test_acc_at_best_valid`가 다른 run은 2개다(G2 행). 이번 run은 `--mem` 없이 실행했다.
 9. 표 B2의 Δ_test가 양수인 셀: dblp 1-shot (+0.26 ± 0.72). 나머지 5셀은 음수.
 10. 표 C 무작위 기준선 잔차(0.69–0.86)는 (64 − r)/64와 근접하다(예: Amazon_clothing 1-shot r = 15.3 → 0.761).
+
+## 부기 (2026-10-06)
+- 이 보고서의 파일명을 `reports/T06_coverage_gap_diag.md`에서 `reports/T06_coverage_gap_diag_report.md`로 바꿨다(사람 지시).
+- 지시서 `instructions/T06_coverage_gap_diag.md`와 파일명이 같아 혼동을 피하기 위해서다.
+- 지시서 §6의 보고 경로 문구는 수정하지 않았다. 본문 내용 변경 없음.
