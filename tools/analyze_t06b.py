@@ -147,6 +147,17 @@ def resid_matrix(U, Bs):
     return M
 
 
+def weighted_resid(U, Bs):
+    """Variance-weighted residual over ordered pairs: 1 - sum ||P d||^2 / sum ||d||^2 (gate G3, user decision 2026-10-06)."""
+    G = U @ U.T
+    sq = np.diag(G)[:, None] + np.diag(G)[None, :] - 2 * G
+    C = U @ Bs.T
+    Gc = C @ C.T
+    pq = np.diag(Gc)[:, None] + np.diag(Gc)[None, :] - 2 * Gc
+    off = ~np.eye(len(U), dtype=bool)
+    return float(1.0 - pq[off].sum() / sq[off].sum())
+
+
 def pair_mean(M):
     n = len(M)
     return float(M[np.triu_indices(n, 1)].mean())
@@ -178,7 +189,7 @@ def axis_rows(protos, split, splits, seed):
             sumT = np.einsum("pi,ij,pj->p", Z, Mp, Z) / 2
             sumB = np.einsum("pi,ij,pj->p", 1 - Z, Mp, 1 - Z) / 2
             gperm = sumT / (nt * (nt - 1) / 2) - sumB / (nb * (nb - 1) / 2)
-            out[name].append({"r": len(BA), "rA": rA, "rB": rB, "rT": rT, "rV": rV, "G": g, "ratio": rT / rB,
+            out[name].append({"r": len(BA), "rA": rA, "wA": weighted_resid(UA, BA), "rB": rB, "rT": rT, "rV": rV, "G": g, "ratio": rT / rB,
                               "p": float(np.mean(gperm >= g)), "gperm_mean": float(gperm.mean())})
             if name == "0.90":
                 PB = basis(UB, 0.90)
@@ -197,7 +208,7 @@ def verdict(vals):
 # ---------------------------------------------------------------- main
 def main():
     L = ["# T06b 요약 — coverage gap 보강 진단", ""]
-    gate = {"G2": [], "G3_split": [], "G3_rhoA": [], "G3_perm": []}
+    gate = {"G2": [], "G3_split": [], "G3_rhoA": [], "G3_wA": [], "G3_perm": []}
     b1 = {}  # (ds, k, s) -> {(space, G): acc}
     axis = {}  # (ds, rowname) -> {variant: [60 dicts]}, angles
     d_rows = defaultdict(lambda: defaultdict(list))  # (layer, ds, k) -> method -> list of per-seed arrays
@@ -345,6 +356,8 @@ def main():
             gperm_abs = abs(float(np.mean([v["gperm_mean"] for v in vals])))
             g_sd = float(np.std([v["G"] for v in vals], ddof=1))
             gate["G3_rhoA"].append(((ds, rn), rA_mean, rA_mean <= 0.12))
+            wA = [v["wA"] for v in vals]
+            gate["G3_wA"].append(((ds, rn), float(np.mean(wA)), float(np.max(wA)), np.mean(wA) <= 0.10 and np.max(wA) <= 0.10))
             gate["G3_perm"].append(((ds, rn), gperm_abs, g_sd, gperm_abs < g_sd))
     L.append("")
 
@@ -413,12 +426,14 @@ def main():
     g3s_fail = [x[0] for x in gate["G3_split"] if not x[1]]
     g3r_fail = [x for x in gate["G3_rhoA"] if not x[2]]
     g3p_fail = [x for x in gate["G3_perm"] if not x[3]]
+    g3w_fail = [x for x in gate["G3_wA"] if not x[3]]
     L.append("## 게이트 점검 기록")
     L.append("| 항목 | 관측 | 결과 |")
     L.append("|---|---|---|")
     L.append(f"| G2 `test_eps.npz` best epoch 에피소드 50개, 노드 수 5·(K+5), classes = episodes.jsonl | {len(gate['G2']) - len(g2_fail)}/{len(gate['G2'])} run 충족 {g2_fail or ''} | {'통과' if not g2_fail else '실패'} |")
     L.append(f"| G3 같은 seed의 split·labels 일치 (L1·L2 × shot 4 run) | {len(gate['G3_split']) - len(g3s_fail)}/{len(gate['G3_split'])} 일치 {g3s_fail or ''} | {'통과' if not g3s_fail else '실패'} |")
-    L.append(f"| G3 0.90 규칙 ρ̄_A ≤ 0.12 (행별 60값 평균) | 최대 {max(x[1] for x in gate['G3_rhoA']):.4f}, 불충족 {[(x[0], round(x[1], 4)) for x in g3r_fail] or '없음'} | {'통과' if not g3r_fail else '실패'} |")
+    L.append(f"| G3 0.90 규칙 ρ̄_A ≤ 0.12 (행별 60값 평균) — 지시서 원 정의, 사용자 결정으로 아래 줄로 대체 | 최대 {max(x[1] for x in gate['G3_rhoA']):.4f}, 불충족 {[(x[0], round(x[1], 4)) for x in g3r_fail] or '없음'} | 실패(대체됨) |")
+    L.append(f"| G3 (사용자 결정, 2026-10-06) 0.90 규칙 분산 가중 잔차 1 − Σ‖P_A d‖²/Σ‖d‖² ≤ 0.10 (A 순서쌍, 행별 60값 평균과 최대) | 행별 평균의 최대 {max(x[1] for x in gate['G3_wA']):.6f}, 행별 최대의 최대 {max(x[2] for x in gate['G3_wA']):.6f}, 충족 {len(gate['G3_wA']) - len(g3w_fail)}/{len(gate['G3_wA'])}행 {[(x[0], round(x[1], 4), round(x[2], 4)) for x in g3w_fail] or ''} | {'통과' if not g3w_fail else '실패'} |")
     L.append(f"| G3 \\|순열 G 평균\\| < 관측 G sd (행별) | 불충족 {[(x[0], round(x[1], 5), round(x[2], 5)) for x in g3p_fail] or '없음'} | {'통과' if not g3p_fail else '실패'} |")
     L.append("")
     L.append("### G1 참고 — L1 `test_acc_at_best_valid` vs T06 같은 seed (일치 요구 없음)")
@@ -441,7 +456,8 @@ def main():
     L.append(f"| P45 | 표 D `diff2` cosine probe ≥ TEG(L1) ≥ 3/6 | {n45}/6 | {'일치' if n45 >= 3 else '어긋남'} |")
     open(OUT, "w").write("\n".join(L) + "\n")
     print(f"wrote {OUT}")
-    print("G2 fail", g2_fail, "| G3 split fail", g3s_fail, "| G3 rhoA fail", g3r_fail, "| G3 perm fail", g3p_fail)
+    print("G2 fail", g2_fail, "| G3 split fail", g3s_fail, "| G3 rhoA fail", g3r_fail, "| G3 wA fail", g3w_fail, "| G3 perm fail", g3p_fail)
+    print("G3 wA per row (mean, max):", [(x[0], round(x[1], 4), round(x[2], 4)) for x in gate["G3_wA"]])
 
 
 if __name__ == "__main__":
