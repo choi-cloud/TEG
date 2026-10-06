@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument("--mem_keys", type=str, default="raw", help="comma-separated memory key kinds: raw,center,str")
     parser.add_argument("--mem_arms", type=str, default="all", choices=["all", "none"], help="evaluate correction arms A/B")
     parser.add_argument("--dump_edges", action="store_true", help="dump per-edge test diagnostics to out_dir/edges_test.npz")
+    parser.add_argument("--dump_emb", action="store_true", help="dump full-graph GCN embedding at the best-valid epoch to out_dir/emb_best.npy")
 
     return parser.parse_known_args()
 
@@ -90,6 +91,7 @@ def config2string(args):
             "mem_keys",
             "mem_arms",
             "dump_edges",
+            "dump_emb",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_

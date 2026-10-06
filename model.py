@@ -121,6 +121,27 @@ class teg_trainer(embedder):
             out[f"{kind}_0.0_max_abs_diff_softmax"] = float((sm - off_softmax).abs().max())
         return out
 
+    def dump_embedding(self, epoch):
+        # GCN output before EGNN/LayerNorm, eval mode, no_grad; overwrites out_dir/emb_best.npy
+        self.conv.eval()
+        with torch.no_grad():
+            emb = self.conv(self.features, self.edges)
+        os.makedirs(self.args.out_dir, exist_ok=True)
+        np.save(os.path.join(self.args.out_dir, "emb_best.npy"), emb.cpu().numpy().astype(np.float32))
+        self.emb_epoch = epoch
+        if not os.path.exists(os.path.join(self.args.out_dir, "split.json")):
+            to_py = lambda xs: [x.item() if hasattr(x, "item") else x for x in xs]
+            with open(os.path.join(self.args.out_dir, "split.json"), "w") as f:
+                json.dump(
+                    {
+                        "class_list_train": to_py(self.class_list_train),
+                        "class_list_valid": to_py(self.class_list_valid),
+                        "class_list_test": to_py(self.class_list_test),
+                    },
+                    f,
+                )
+            np.save(os.path.join(self.args.out_dir, "labels.npy"), self.labels.cpu().numpy())
+
     def mem_configs(self):
         # TEG rule per config: best valid by strict '<', test taken whenever valid equals the best (later epoch wins ties)
         configs = {}
@@ -376,6 +397,7 @@ class teg_trainer(embedder):
         self.sigma_skip = {name: 0 for name, kind, _ in MEM_ARMS if kind == "B"}
         self.sigma_skip["B_0.0"] = 0
         self.edge_dump = []
+        self.emb_epoch = None
 
         for epoch in tqdm(range(self.args.epochs + 1)):
 
@@ -440,6 +462,10 @@ class teg_trainer(embedder):
                 test_acc_at_best_valid = acc_test
                 test_f1_at_best_valid = f1_test
 
+            # T06: full-graph GCN embedding at the original model-selection condition (read-only, no RNG)
+            if self.args.dump_emb and self.args.out_dir is not None and acc_valid == best_acc_valid:
+                self.dump_embedding(epoch)
+
             tqdm.write(f"# Current Settings : {self.config_str}")
             tqdm.write(f"# Best_Acc_Train : {best_acc_train:.4f}, F1 : {best_f1_train:.4f} at {best_epoch_train} epoch")
             tqdm.write(f"# Best_Acc_Valid : {best_acc_valid:.4f}, F1 : {best_f1_valid:.4f} at {best_epoch_valid} epoch")
@@ -467,6 +493,7 @@ class teg_trainer(embedder):
             with open(os.path.join(self.args.out_dir, "run.json"), "w") as f:
                 json.dump(
                     {"config": vars(self.args), "epochs": self.epoch_records, "final": final, "wall_time_sec": time.time() - start_time}
+                    | ({"emb_epoch": self.emb_epoch} if self.args.dump_emb else {})
                     | (
                         {
                             "sanity": self.mem_sanity,
