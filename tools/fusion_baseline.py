@@ -135,3 +135,54 @@ def evaluate(run_dir, H, l_transform="log", alpha="val"):
     a = select_alpha(*r["lp"]["valid"], yv) if alpha == "val" else float(alpha)
     acc = episode_acc(combine(*r["lp"]["test"], a), r["targets"]["test"]["y"])
     return {"acc": acc, "alpha": a, "T_L": r["T_L"], "s": r["s"], "n_replaced": r["n_replaced"], "prepared": r}
+
+
+# ---------------------------------------------------------------- T07 additions (new functions only; the functions above are unchanged)
+def diffusion_features_hops(dataset, hops):
+    """Row-normalized A_hat^hops X (hops >= 0) with the same A_hat as diffusion_features."""
+    from utils import load_data
+
+    cwd = os.getcwd()
+    os.chdir(ROOT)
+    try:
+        edges, _, X, _, _, _, _, _, _, _ = load_data(dataset)
+    finally:
+        os.chdir(cwd)
+    X = X.numpy().astype(np.float32)
+    ei, w = gcn_norm(edges, None, X.shape[0], add_self_loops=True)
+    ei, w = ei.numpy(), w.numpy()
+    A = sp.csr_matrix((w, (ei[1], ei[0])), shape=(X.shape[0], X.shape[0]))
+    D = X
+    for _ in range(hops):
+        D = (A @ D).astype(np.float32)
+    return D / np.maximum(np.linalg.norm(D, axis=1, keepdims=True), 1e-12)
+
+
+def cosine_probe_acc(V, support, query, k, n_way=N_WAY):
+    """Per-episode accuracy of the cosine nearest-prototype probe on representation V (query labels in class order)."""
+    score = view_d_scores(V, support, query, k, n_way)
+    y = np.repeat(np.arange(n_way), query.shape[1] // n_way)[None, :]
+    return (score.argmax(-1) == y).mean(-1)
+
+
+def evaluate_npz(npz_path, H, alpha=0.5, l_transform="log"):
+    """Same computation as evaluate() on all episodes of an npz with eval_logits keys (e.g. fixed_eval_logits.npz):
+    temperatures (and alpha="val") from the file's valid episodes (mode 0), accuracies on its test episodes (mode 1).
+    Returns per-test-episode accuracies of the combination (`acc`), view L alone (`acc_L`), view D alone (`acc_D`),
+    and alpha, T_L, s, n_replaced."""
+    Z = dict(np.load(npz_path))
+    k = Z["support"].shape[1] // N_WAY
+    sel = {}
+    n_rep = 0
+    for mi, mode in ((0, "valid"), (1, "test")):
+        m = np.where(Z["mode"] == mi)[0]
+        m = m[np.argsort(Z["ep_idx"][m], kind="stable")]
+        lL, n = l_scores(Z["logits"][m], l_transform)
+        n_rep += n
+        sel[mode] = {"lL": lL, "lD": view_d_scores(H, Z["support"][m], Z["query"][m], k), "y": Z["query_y"][m].astype(int)}
+    T_L, s, iT, iS = fit_temperatures(sel["valid"]["lL"], sel["valid"]["lD"], sel["valid"]["y"])
+    lp = {mode: (log_softmax(sel[mode]["lL"] / T_L), log_softmax(s * sel[mode]["lD"])) for mode in sel}
+    a = select_alpha(*lp["valid"], sel["valid"]["y"]) if alpha == "val" else float(alpha)
+    yt = sel["test"]["y"]
+    return {"acc": episode_acc(combine(*lp["test"], a), yt), "acc_L": episode_acc(lp["test"][0], yt), "acc_D": episode_acc(lp["test"][1], yt),
+            "alpha": a, "T_L": T_L, "s": s, "iT": iT, "iS": iS, "n_replaced": n_rep}

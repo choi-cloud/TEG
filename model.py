@@ -11,8 +11,21 @@ import os
 import json
 import time
 from sklearn.metrics import roc_auc_score
+import scipy.sparse as scipy_sparse
+from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from memory import RelationMemory
 from argument import config2string, parse_args
+
+def diffusion_teacher(features, edges):
+    """T07 teacher: row-normalized A_hat^2 X, A_hat = gcn_norm(edge_index, add_self_loops=True).
+    Same definition as tools/fusion_baseline.diffusion_features (kept here so the model does not import tools/)."""
+    X = features.cpu().numpy().astype(np.float32)
+    ei, w = gcn_norm(edges.cpu(), None, X.shape[0], add_self_loops=True)
+    ei, w = ei.numpy(), w.numpy()
+    A = scipy_sparse.csr_matrix((w, (ei[1], ei[0])), shape=(X.shape[0], X.shape[0]))  # out[target] += w * x[source]
+    D2 = (A @ (A @ X)).astype(np.float32)
+    return D2 / np.maximum(np.linalg.norm(D2, axis=1, keepdims=True), 1e-12)
+
 
 MEM_ARMS = [("A_0.1", "A", 0.1), ("A_0.3", "A", 0.3), ("A_0.5", "A", 0.5), ("B_0.1", "B", 0.1), ("B_0.3", "B", 0.3), ("B_0.5", "B", 0.5)]
 MEM_EP_KEYS = ["n_edges", "auc_phat", "auc_dist", "mean_phat_same", "mean_phat_diff", "mean_top1_sim"]
@@ -32,6 +45,18 @@ class teg_trainer(embedder):
 
         self.config_str = config2string(args)
         self.set_seed = set_seed
+
+        if args.pres_lambda > 0:
+            # T07 Preserve: fixed teacher, node pool, dedicated sampler (no global RNG)
+            self.pres_teacher = torch.from_numpy(diffusion_teacher(self.features, self.edges)).to(self.device)
+            labels_np = self.labels.cpu().numpy()
+            if args.pres_pool == "nb":
+                base = set(int(c) for c in self.class_list_train)
+                pool = [i for i in range(len(labels_np)) if int(labels_np[i]) not in base]
+            else:
+                pool = list(range(len(labels_np)))
+            self.pres_pool_idx = torch.LongTensor(pool)
+            self.pres_gen = torch.Generator().manual_seed(7000 + set_seed)
 
         if args.mem:
             self.memory = RelationMemory(args.mem_k, args.mem_tau, args.mem_chunk, self.device)
@@ -145,6 +170,83 @@ class teg_trainer(embedder):
                     f,
                 )
             np.save(os.path.join(self.args.out_dir, "labels.npy"), self.labels.cpu().numpy())
+
+    def pres_loss(self, embeddings):
+        """Neighbour-distribution preservation KL(p_T || p_S) on m pool nodes. z = EGNN input coordinates after LayerNorm,
+        taken from the full-node GCN output of the current training forward (no extra forward)."""
+        perm = torch.randperm(len(self.pres_pool_idx), generator=self.pres_gen)[: self.args.pres_m]
+        idx = self.pres_pool_idx[perm].to(self.device)
+        z = F.normalize(self.egnn.LayerNorm(embeddings[idx]), dim=1)
+        t = self.pres_teacher[idx]
+        eye = torch.eye(len(idx), dtype=torch.bool, device=self.device)
+        s_t = (t @ t.T / self.args.pres_tau).masked_fill(eye, float("-inf"))
+        s_s = (z @ z.T / self.args.pres_tau).masked_fill(eye, float("-inf"))
+        logp_t = F.log_softmax(s_t, dim=1)
+        logp_s = F.log_softmax(s_s, dim=1)
+        # diagonal excluded: p_T = 0 there; fill -inf log-probs with 0 so no NaN enters forward or backward
+        kl = logp_t.exp() * (logp_t.masked_fill(eye, 0.0) - logp_s.masked_fill(eye, 0.0))
+        return kl.sum(1).mean()
+
+    def eval_episode(self, id_support, id_query):
+        """Original evaluation forward for a given episode (eval mode, called under no_grad). Returns the accuracy() tensor."""
+        embeddings = self.conv(self.features, self.edges)
+        embeds_epi = torch.cat([embeddings[id_support], embeddings[id_query]])
+        epi_str = torch.cat([self.structural_features[id_support], self.structural_features[id_query]])
+        edge1 = []
+        for i in range(len(id_support), len(id_support) + len(id_query)):
+            edge1.extend([i] * len(id_support))
+        edge1 = torch.LongTensor(edge1)
+        edge2 = torch.LongTensor(list(range(len(id_support))) * len(id_query))
+        edge_index = torch.stack((torch.cat([edge1, edge2]), torch.cat([edge2, edge1]))).to(self.device)
+        _, output_softmax = self.episode_forward(epi_str, embeds_epi, edge_index, len(id_support))
+        return output_softmax.cpu().detach()
+
+    def fixed_episodes(self, rng, classes, n_epi):
+        """Fixed episodes from a dedicated random.Random instance (same per-class order as task_generator_in_class)."""
+        eps = []
+        for _ in range(n_epi):
+            cls = rng.sample(classes, self.args.way)
+            sup, qry = [], []
+            for c in cls:
+                ids = rng.sample(self.id_by_class[c], self.k_shot + self.n_query)
+                sup.extend(ids[: self.k_shot])
+                qry.extend(ids[self.k_shot :])
+            eps.append((np.array(sup), np.array(qry), cls))
+        return eps
+
+    def run_fixed_eval(self):
+        """T07: reload the model-selection checkpoint, evaluate fixed episodes; also re-evaluate the dumped best-epoch test episodes."""
+        self.conv.load_state_dict(self.ckpt["conv"])
+        self.egnn.load_state_dict(self.ckpt["egnn"])
+        self.conv.eval()
+        self.egnn.eval()
+        to_py = lambda xs: [x.item() if hasattr(x, "item") else x for x in xs]
+        rec = []
+        with torch.no_grad():
+            for mi, classes, n_epi, seed_off in ((1, self.class_list_test, 200, 9000), (0, self.class_list_valid, 100, 9100)):
+                for ep_idx, (sup, qry, cls) in enumerate(self.fixed_episodes(random.Random(seed_off + self.set_seed), classes, n_epi)):
+                    prob = self.eval_episode(sup, qry)
+                    y = np.array([cls.index(i) for i in self.labels[qry]])
+                    rec.append({"epoch": -1, "ep_idx": ep_idx, "mode": mi, "support": sup, "query": qry, "classes": to_py(cls),
+                                "query_y": y, "logits": prob.numpy().astype(np.float32)})
+            # checkpoint re-evaluation of the dumped test episodes of best_epoch_valid (gate G2)
+            recheck = None
+            if self.args.dump_logits:
+                e = self.best_epoch_valid_final
+                acc_by_ep = {r["ep_idx"]: r["acc"] for r in self.episode_records if r["epoch"] == e and r["mode"] == "test"}
+                n, same = 0, 0
+                for d in self.logit_dump:
+                    if d["epoch"] == e and d["mode"] == 1:
+                        prob = self.eval_episode(d["support"], d["query"])
+                        acc = float(accuracy(prob, torch.LongTensor(d["query_y"])))
+                        n += 1
+                        same += acc == acc_by_ep[d["ep_idx"]]
+                recheck = {"epoch": e, "n": n, "n_equal": same}
+        self.fixed_recheck = recheck
+        np.savez_compressed(
+            os.path.join(self.args.out_dir, "fixed_eval_logits.npz"),
+            **{k: np.array([d[k] for d in rec]) for k in rec[0]},
+        )
 
     def mem_configs(self):
         # TEG rule per config: best valid by strict '<', test taken whenever valid equals the best (later epoch wins ties)
@@ -316,6 +418,12 @@ class teg_trainer(embedder):
 
                 loss_train = self.args.gamma * loss_l1_train + (1 - self.args.gamma) * loss_l2_train
 
+            if mode == "train" and self.args.pres_lambda > 0:
+                # T07 Preserve: lambda * L_pres on the same forward's full-node GCN output
+                pres = self.pres_loss(embeddings)
+                loss_train = loss_train + self.args.pres_lambda * pres
+                self.pres_epoch.append(float(pres.detach()))
+
             if mode == "train":
                 if epoch != 0:
                     loss_train.backward()
@@ -424,9 +532,12 @@ class teg_trainer(embedder):
         self.emb_epoch = None
         self.test_eps = []
         self.logit_dump = []
+        self.pres_epoch = []
+        self.ckpt, self.ckpt_epoch, self.fixed_recheck = None, None, None
 
         for epoch in tqdm(range(self.args.epochs + 1)):
 
+            self.pres_epoch = []
             acc_train, f1_train = self.train_epoch("train", self.args.episodes, epoch)
 
             with torch.no_grad():
@@ -455,6 +566,8 @@ class teg_trainer(embedder):
                     "test_f1": float(f1_test),
                 }
             )
+            if self.args.pres_lambda > 0:
+                self.epoch_records[-1]["pres_loss_mean"] = float(np.mean(self.pres_epoch))
             if self.args.mem:
                 pooled = {"mem_size": len(self.memory), "auc_phat_pooled": None, "auc_dist_pooled": None}
                 pooled.update({"auc_phat_pooled_" + key: None for key in self.mem_keys} | {"auc_dfinal_pooled": None})
@@ -492,6 +605,14 @@ class teg_trainer(embedder):
             if self.args.dump_emb and self.args.out_dir is not None and acc_valid == best_acc_valid:
                 self.dump_embedding(epoch)
 
+            # T07: in-memory checkpoint at the original model-selection condition (no RNG)
+            if self.args.fixed_eval and acc_valid == best_acc_valid:
+                self.ckpt = {
+                    "conv": {k: v.detach().clone() for k, v in self.conv.state_dict().items()},
+                    "egnn": {k: v.detach().clone() for k, v in self.egnn.state_dict().items()},
+                }
+                self.ckpt_epoch = epoch
+
             tqdm.write(f"# Current Settings : {self.config_str}")
             tqdm.write(f"# Best_Acc_Train : {best_acc_train:.4f}, F1 : {best_f1_train:.4f} at {best_epoch_train} epoch")
             tqdm.write(f"# Best_Acc_Valid : {best_acc_valid:.4f}, F1 : {best_f1_valid:.4f} at {best_epoch_valid} epoch")
@@ -499,6 +620,11 @@ class teg_trainer(embedder):
             tqdm.write(f"# Test_At_Best_Valid : {test_acc_at_best_valid:.4f}, F1 : {test_f1_at_best_valid:.4f} at {best_epoch_valid} epoch\n")
 
         np.set_printoptions(formatter={"float_kind": lambda x: "{0:0.4f}".format(x)})
+
+        if self.args.fixed_eval and self.args.out_dir is not None:
+            os.makedirs(self.args.out_dir, exist_ok=True)
+            self.best_epoch_valid_final = best_epoch_valid
+            self.run_fixed_eval()
 
         if self.args.out_dir is not None:
             final = {
@@ -520,6 +646,7 @@ class teg_trainer(embedder):
                 json.dump(
                     {"config": vars(self.args), "epochs": self.epoch_records, "final": final, "wall_time_sec": time.time() - start_time}
                     | ({"emb_epoch": self.emb_epoch} if self.args.dump_emb else {})
+                    | ({"ckpt_epoch": self.ckpt_epoch, "ckpt_recheck": self.fixed_recheck} if self.args.fixed_eval else {})
                     | (
                         {
                             "sanity": self.mem_sanity,

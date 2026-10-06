@@ -41,6 +41,11 @@ def parse_args():
     parser.add_argument("--dump_emb", action="store_true", help="dump full-graph GCN embedding at the best-valid epoch to out_dir/emb_best.npy")
     parser.add_argument("--dump_test_eps", action="store_true", help="dump sampled test episodes to out_dir/test_eps.npz")
     parser.add_argument("--dump_logits", action="store_true", help="dump valid/test query x class scores used by accuracy() to out_dir/eval_logits.npz")
+    parser.add_argument("--pres_lambda", type=float, default=0.0, help="T07 preservation loss weight (0: original)")
+    parser.add_argument("--pres_tau", type=float, default=0.1, help="T07 preservation softmax temperature")
+    parser.add_argument("--pres_m", type=int, default=1024, help="T07 preservation batch size")
+    parser.add_argument("--pres_pool", type=str, default="nb", choices=["nb", "all"], help="T07 node pool: nb = non-base nodes, all = all nodes")
+    parser.add_argument("--fixed_eval", action="store_true", help="T07 fixed-episode evaluation of the selected checkpoint")
     parser.add_argument("--gcn_layers", type=int, default=1, choices=[1, 2], help="1: original GCN; 2: two-layer variant (T06b)")
 
     return parser.parse_known_args()
@@ -98,6 +103,11 @@ def config2string(args):
             "dump_test_eps",
             "gcn_layers",
             "dump_logits",
+            "pres_lambda",
+            "pres_tau",
+            "pres_m",
+            "pres_pool",
+            "fixed_eval",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_
