@@ -1,7 +1,7 @@
-# T07 보고 — E1: 보존 손실(Preserve)만 추가한 TEG + 공통 에피소드 비교 (2026-10-06, 브랜치 `preserve_rehearse`, auto mode) — **게이트 G2(체크포인트 재평가) 2 run 실패, 중단**
+# T07 보고 — E1: 보존 손실(Preserve)만 추가한 TEG + 공통 에피소드 비교 (2026-10-06, 브랜치 `preserve_rehearse`, auto mode) — G2 체크포인트 재평가 2 run 실패로 중단 → **사용자 결정(2026-10-06)으로 재평가 대상 에폭 변경, 통과**
 
 ## 1. 변경 파일과 위치
-커밋: 이 보고서와 같은 커밋. **태그 `t07` 미부여**(게이트 실패, §6). 선행 커밋: `a1bb61c`(지시서), `c2ab835`(설계 문서 `docs/preserve_rehearse_methodology_v0.1.md`).
+커밋: `8711435`(게이트 실패 시점, 태그 없음) → 기준 변경 반영 커밋(태그 `t07`, 부기 참조). 선행 커밋: `a1bb61c`(지시서), `c2ab835`(설계 문서 `docs/preserve_rehearse_methodology_v0.1.md`).
 
 | 파일 | 위치 | 줄 | 내용 |
 |---|---|---|---|
@@ -37,7 +37,8 @@
 | G1 | 추가 줄 전역 난수 없음, λ = 0 미실행 명시, 7개 설정의 덤프 에피소드(전 에폭 valid·test) `support`·`query`·`classes` 동일, `base` vs T08 병기 | 1절 명시. 18개 (데이터셋, shot, seed) 모두 7개 설정 완전 동일. `base` vs T08 `test_acc_at_best_valid` 같은 값 17/18(다른 값: dblp 5-shot s0 0.8496 vs 0.8504) | 통과 |
 | G2 | 교사 h̄ 최대 차 ≤ 1e-6 | 세 데이터셋 모두 0.0 | 통과 |
 | G2 | 고정 에피소드(test 200·valid 100) 7개 설정 동일 | 18/18 | 통과 |
-| G2 | 체크포인트로 `best_epoch_valid` test 에피소드 50개 재평가 = `episodes.jsonl` | **124/126 run 50/50 일치. 2 run 불일치**: `l0.1_all` Amazon_clothing 1-shot s1 (20/50), `l10_nb` Amazon_electronics 5-shot s2 (35/50) | **실패** |
+| G2 | 체크포인트로 `best_epoch_valid` test 에피소드 50개 재평가 = `episodes.jsonl` (지시서 원 정의) | 124/126 run 50/50 일치. 2 run 불일치: `l0.1_all` Amazon_clothing 1-shot s1 (20/50), `l10_nb` Amazon_electronics 5-shot s2 (35/50) | 실패 → **사용자 결정으로 다음 줄 기준으로 대체** |
+| G2 | **(사용자 결정, 2026-10-06)** 재평가 대상 에폭 = `ckpt_epoch`. 재실행 없음 | `ckpt_epoch` = `best_epoch_valid`인 124 run: 기존 재평가 50/50 일치(124/124). 동점 2 run: **예외**(체크포인트 미저장으로 `ckpt_epoch` 재평가 불가). 대신 `ckpt_epoch`의 원본 test 정확도 = `test_acc_at_best_valid` (0.8696 = 0.8696, 0.9120 = 0.9120). 두 run은 표 2·3의 선택 설정(sel)에 포함되지 않음 | **통과(예외 2 run 표기)** |
 | G2 | λ > 0 run `pres_loss_mean` 전 에폭 유한 | 108/108 run, 에폭 0–10 모두 유한 | 통과 |
 | G3 | 126 run 파일 4종 | 126/126 | 통과 |
 | G4 | 확장 `fusion_baseline`이 `t08b` 표 B 재현 | `t08b` 시점 `fusion_baseline.py`와 run별 α_val·T_L·s·에피소드별 정확도 18/18 동일. 렌더링한 표 B 행 = `reports/T08b_summary.md` | 통과 |
@@ -164,3 +165,18 @@
 7. F(cfg) 온도 보정의 격자 끝 최적값: 0개 run.
 8. `base` 설정의 고정 test 정확도와 원본 `test_acc_at_best_valid`는 서로 다른 에피소드 집합(고정 200 vs 원본 50)에서 나온 값이다(표 1).
 9. G4 점검은 `git show t08b:tools/fusion_baseline.py`를 임시 파일로 꺼내 import해 비교한 뒤 삭제했다.
+
+## 부기 (2026-10-06) — G2 체크포인트 재평가 기준 변경 (사용자 결정)
+- **결정 내용:** G2의 체크포인트 재평가 항목은 지시서 정의 오류로 처리한다. 원본은 `test_acc_at_best_valid`를 `==` 규칙으로, `best_epoch_valid`를 `<` 규칙으로 기록하므로, valid 동점이면 두 에폭이 갈린다. 재평가 대상 에폭을 `ckpt_epoch`로 바꾼다. 이 변경은 **사용자 결정**이다. 지시서 원문(`instructions/T07_preserve_E1.md`)은 수정하지 않았다.
+- **재실행:** 하지 않았다.
+- **124 run:** `ckpt_epoch` = `best_epoch_valid`이고, 기존 재평가 결과(50/50 일치)를 그대로 통과로 기록한다.
+- **예외 2 run** (체크포인트가 메모리에만 있었고 저장되지 않아 `ckpt_epoch` 재평가 불가):
+
+| run | `best_epoch_valid` | `ckpt_epoch` | valid 동점 | `ckpt_epoch`의 원본 test 정확도 | `test_acc_at_best_valid` | 같음 |
+|---|---|---|---|---|---|---|
+| `l0.1_all` Amazon_clothing 1-shot s1 | 3 | 7 | 예 (0.8312) | 0.8696 | 0.8696 | 예 |
+| `l10_nb` Amazon_electronics 5-shot s2 | 4 | 6 | 예 (0.9600) | 0.9120 | 0.9120 | 예 |
+
+- **선택 설정 포함 여부:** 표 2·3의 선택 설정은 Amazon_clothing 1-shot = `l1_nb`, Amazon_electronics 5-shot = `l1_nb`다. 예외 2 run의 설정(`l0.1_all`, `l10_nb`)은 해당 셀의 sel이 아니고 `base`도 아니므로, 표 2·3 계산에 쓰이지 않는다. 표 1·4에는 해당 설정의 seed 1개 값으로 포함된다.
+- **변경하지 않은 것:** 표·판정·사전 등록은 바꾸지 않았다.
+- **게이트 상태:** G1–G5 모두 통과(G2는 예외 2 run 표기). 태그 `t07`.
