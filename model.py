@@ -6,6 +6,8 @@ from tqdm.auto import tqdm
 from utils import *
 from torch import optim
 import torch.nn.functional as F
+import torch.nn as nn
+import math
 import torch
 import os
 import json
@@ -16,14 +18,17 @@ from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from memory import RelationMemory
 from argument import config2string, parse_args
 
-def diffusion_teacher(features, edges):
-    """T07 teacher: row-normalized A_hat^2 X, A_hat = gcn_norm(edge_index, add_self_loops=True).
-    Same definition as tools/fusion_baseline.diffusion_features (kept here so the model does not import tools/)."""
+def diffusion_teacher(features, edges, hops=2):
+    """T07/T09 teacher: row-normalized A_hat^hops X (hops = 0 -> X), A_hat = gcn_norm(edge_index, add_self_loops=True).
+    hops = 2 is the T07 definition, same as tools/fusion_baseline.diffusion_features (kept here so the model does not import tools/)."""
     X = features.cpu().numpy().astype(np.float32)
     ei, w = gcn_norm(edges.cpu(), None, X.shape[0], add_self_loops=True)
     ei, w = ei.numpy(), w.numpy()
     A = scipy_sparse.csr_matrix((w, (ei[1], ei[0])), shape=(X.shape[0], X.shape[0]))  # out[target] += w * x[source]
-    D2 = (A @ (A @ X)).astype(np.float32)
+    D2 = X
+    for _ in range(hops):
+        D2 = A @ D2
+    D2 = D2.astype(np.float32)
     return D2 / np.maximum(np.linalg.norm(D2, axis=1, keepdims=True), 1e-12)
 
 
@@ -48,7 +53,8 @@ class teg_trainer(embedder):
 
         if args.pres_lambda > 0:
             # T07 Preserve: fixed teacher, node pool, dedicated sampler (no global RNG)
-            self.pres_teacher = torch.from_numpy(diffusion_teacher(self.features, self.edges)).to(self.device)
+            if args.pres_loss != "infonce":
+                self.pres_teacher = torch.from_numpy(diffusion_teacher(self.features, self.edges, args.pres_teacher_hops)).to(self.device)
             labels_np = self.labels.cpu().numpy()
             if args.pres_pool == "nb":
                 base = set(int(c) for c in self.class_list_train)
@@ -57,6 +63,18 @@ class teg_trainer(embedder):
                 pool = list(range(len(labels_np)))
             self.pres_pool_idx = torch.LongTensor(pool)
             self.pres_gen = torch.Generator().manual_seed(7000 + set_seed)
+            if args.pres_loss == "infonce":
+                # T09 GRACE-style baseline: augmentation generator, projection head (64 -> 64 -> 64, ELU) in the same optimizer
+                self.aug_gen = torch.Generator().manual_seed(8000 + set_seed)
+                with torch.random.fork_rng(devices=[self.device]):
+                    head = nn.Sequential(nn.Linear(conf["gcn_out"], 64), nn.ELU(), nn.Linear(64, 64))
+                for lin in (head[0], head[2]):
+                    bound = 1.0 / math.sqrt(lin.in_features)
+                    with torch.no_grad():
+                        lin.weight.uniform_(-bound, bound, generator=self.aug_gen)
+                        lin.bias.uniform_(-bound, bound, generator=self.aug_gen)
+                self.pres_head = head.to(self.device)
+                self.optim.add_param_group({"params": self.pres_head.parameters()})
 
         if args.mem:
             self.memory = RelationMemory(args.mem_k, args.mem_tau, args.mem_chunk, self.device)
@@ -172,6 +190,56 @@ class teg_trainer(embedder):
             np.save(os.path.join(self.args.out_dir, "labels.npy"), self.labels.cpu().numpy())
 
     def pres_loss(self, embeddings):
+        """T09 dispatcher over --pres_loss (kl: T07 loss, unchanged)."""
+        if self.args.pres_loss == "mse":
+            return self._pres_mse(embeddings)
+        if self.args.pres_loss == "infonce":
+            return self._pres_infonce()
+        return self._pres_kl(embeddings)
+
+    def _pres_sample(self):
+        perm = torch.randperm(len(self.pres_pool_idx), generator=self.pres_gen)[: self.args.pres_m]
+        return self.pres_pool_idx[perm].to(self.device)
+
+    def _pres_mse(self, embeddings):
+        """mean_{i != j} (cos(z_i, z_j) - cos(h_i, h_j))^2 on m pool nodes (same z and teacher as kl)."""
+        idx = self._pres_sample()
+        z = F.normalize(self.egnn.LayerNorm(embeddings[idx]), dim=1)
+        t = self.pres_teacher[idx]
+        off = ~torch.eye(len(idx), dtype=torch.bool, device=self.device)
+        return ((z @ z.T - t @ t.T)[off] ** 2).mean()
+
+    def _view_embedding(self):
+        """One augmented view (column feature masking p=0.3, edge dropping p=0.2; dedicated generator) through the GCN.
+        Extra GCN forward inside fork_rng; the GCNConv cache is bypassed for the dropped-edge graph and restored afterwards."""
+        col_keep = (torch.rand(self.features.shape[1], generator=self.aug_gen) >= 0.3).to(self.device, self.features.dtype)
+        e_keep = (torch.rand(self.edges.shape[1], generator=self.aug_gen) >= 0.2).to(self.device)
+        conv1 = self.conv.conv1
+        saved = conv1._cached_edge_index
+        conv1._cached_edge_index, conv1.cached = None, False
+        try:
+            with torch.random.fork_rng(devices=[self.device]):
+                out = self.conv(self.features * col_keep, self.edges[:, e_keep])
+        finally:
+            conv1._cached_edge_index, conv1.cached = saved, True
+        return out
+
+    def _pres_infonce(self):
+        """GRACE-style two-view InfoNCE (inter- and intra-view negatives, temperature 0.5, both directions) on m pool nodes."""
+        idx = self._pres_sample()
+        h1 = F.normalize(self.pres_head(self.egnn.LayerNorm(self._view_embedding()[idx])), dim=1)
+        h2 = F.normalize(self.pres_head(self.egnn.LayerNorm(self._view_embedding()[idx])), dim=1)
+        eye = torch.eye(len(idx), dtype=torch.bool, device=self.device)
+
+        def one_side(a, b):
+            between = a @ b.T / 0.5
+            refl = (a @ a.T / 0.5).masked_fill(eye, float("-inf"))
+            denom = torch.logsumexp(torch.cat([between, refl], dim=1), dim=1)
+            return (denom - between.diagonal()).mean()
+
+        return 0.5 * (one_side(h1, h2) + one_side(h2, h1))
+
+    def _pres_kl(self, embeddings):
         """Neighbour-distribution preservation KL(p_T || p_S) on m pool nodes. z = EGNN input coordinates after LayerNorm,
         taken from the full-node GCN output of the current training forward (no extra forward)."""
         perm = torch.randperm(len(self.pres_pool_idx), generator=self.pres_gen)[: self.args.pres_m]
@@ -232,7 +300,7 @@ class teg_trainer(embedder):
             # checkpoint re-evaluation of the dumped test episodes of best_epoch_valid (gate G2)
             recheck = None
             if self.args.dump_logits:
-                e = self.best_epoch_valid_final
+                e = self.ckpt_epoch  # CLAUDE.md §3 note: checkpoint comparisons use ckpt_epoch
                 acc_by_ep = {r["ep_idx"]: r["acc"] for r in self.episode_records if r["epoch"] == e and r["mode"] == "test"}
                 n, same = 0, 0
                 for d in self.logit_dump:

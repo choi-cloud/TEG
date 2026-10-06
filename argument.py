@@ -45,6 +45,8 @@ def parse_args():
     parser.add_argument("--pres_tau", type=float, default=0.1, help="T07 preservation softmax temperature")
     parser.add_argument("--pres_m", type=int, default=1024, help="T07 preservation batch size")
     parser.add_argument("--pres_pool", type=str, default="nb", choices=["nb", "all"], help="T07 node pool: nb = non-base nodes, all = all nodes")
+    parser.add_argument("--pres_teacher_hops", type=int, default=2, choices=[0, 1, 2], help="T09 teacher: row-normalized A_hat^k X")
+    parser.add_argument("--pres_loss", type=str, default="kl", choices=["kl", "mse", "infonce"], help="T09 auxiliary loss form")
     parser.add_argument("--fixed_eval", action="store_true", help="T07 fixed-episode evaluation of the selected checkpoint")
     parser.add_argument("--gcn_layers", type=int, default=1, choices=[1, 2], help="1: original GCN; 2: two-layer variant (T06b)")
 
@@ -108,6 +110,8 @@ def config2string(args):
             "pres_m",
             "pres_pool",
             "fixed_eval",
+            "pres_teacher_hops",
+            "pres_loss",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_
