@@ -331,6 +331,22 @@ class teg_trainer(embedder):
             acc_score = accuracy(output, label_list)
             f1_score = f1(output, label_list)
 
+            if self.args.dump_logits and (mode == "valid" or mode == "test"):
+                # T08: read-only copy of the exact tensor passed to accuracy() above (argmax in utils.accuracy)
+                with torch.no_grad():
+                    self.logit_dump.append(
+                        {
+                            "epoch": epoch,
+                            "ep_idx": episode,
+                            "mode": 0 if mode == "valid" else 1,
+                            "support": np.array(id_support),
+                            "query": np.array(id_query),
+                            "classes": [c.item() if hasattr(c, "item") else c for c in class_selected],
+                            "query_y": label_list.numpy().copy(),
+                            "logits": output.numpy().astype(np.float32),
+                        }
+                    )
+
             acc_epoch.append(acc_score)
             f1_epoch.append(f1_score)
 
@@ -407,6 +423,7 @@ class teg_trainer(embedder):
         self.edge_dump = []
         self.emb_epoch = None
         self.test_eps = []
+        self.logit_dump = []
 
         for epoch in tqdm(range(self.args.epochs + 1)):
 
@@ -519,6 +536,11 @@ class teg_trainer(embedder):
             with open(os.path.join(self.args.out_dir, "episodes.jsonl"), "w") as f:
                 for rec in self.episode_records:
                     f.write(json.dumps(rec) + "\n")
+            if self.args.dump_logits:
+                np.savez_compressed(
+                    os.path.join(self.args.out_dir, "eval_logits.npz"),
+                    **{k: np.array([d[k] for d in self.logit_dump]) for k in self.logit_dump[0]},
+                )
             if self.args.dump_test_eps:
                 np.savez_compressed(
                     os.path.join(self.args.out_dir, "test_eps.npz"),
