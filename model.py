@@ -1,5 +1,5 @@
 from calendar import c
-from layers.GCN import GCN
+from layers.GCN import GCN, GCN2
 from layers.EGNN import EGNN
 from embedder import embedder
 from tqdm.auto import tqdm
@@ -21,7 +21,11 @@ MEM_EP_KEYS = ["n_edges", "auc_phat", "auc_dist", "mean_phat_same", "mean_phat_d
 class teg_trainer(embedder):
     def __init__(self, args, conf, set_seed):
         embedder.__init__(self, args, conf, set_seed)
-        self.conv = GCN(self.features.shape[1], conf["gcn_out"], args.dropout).to(self.device)
+        if args.gcn_layers == 2:
+            # T06b variant model; --gcn_layers 1 (default) keeps the original line below
+            self.conv = GCN2(self.features.shape[1], 64, conf["gcn_out"], args.dropout).to(self.device)
+        else:
+            self.conv = GCN(self.features.shape[1], conf["gcn_out"], args.dropout).to(self.device)
         self.egnn = EGNN(self.structural_features.shape[1], conf["egnn_in"], n_layers=args.n_layers).to(self.device)
 
         self.optim = optim.Adam([{"params": self.conv.parameters()}, {"params": self.egnn.parameters()}], lr=args.lr, weight_decay=5e-4)
@@ -209,6 +213,10 @@ class teg_trainer(embedder):
                 class_selected = random.sample(self.class_list_test, self.args.way)
 
             id_support, id_query, class_selected = task_generator_in_class(self.id_by_class, class_selected, self.n_way, self.k_shot, self.n_query)
+
+            if self.args.dump_test_eps and mode == "test":
+                # read-only copy of the already-sampled test episode (T06b)
+                self.test_eps.append((epoch, episode, np.array(id_support), np.array(id_query), [c.item() if hasattr(c, "item") else c for c in class_selected]))
 
             # ________________
             # graph conv (GCN)
@@ -398,6 +406,7 @@ class teg_trainer(embedder):
         self.sigma_skip["B_0.0"] = 0
         self.edge_dump = []
         self.emb_epoch = None
+        self.test_eps = []
 
         for epoch in tqdm(range(self.args.epochs + 1)):
 
@@ -510,6 +519,15 @@ class teg_trainer(embedder):
             with open(os.path.join(self.args.out_dir, "episodes.jsonl"), "w") as f:
                 for rec in self.episode_records:
                     f.write(json.dumps(rec) + "\n")
+            if self.args.dump_test_eps:
+                np.savez_compressed(
+                    os.path.join(self.args.out_dir, "test_eps.npz"),
+                    epoch=np.array([e[0] for e in self.test_eps], dtype=np.int16),
+                    ep_idx=np.array([e[1] for e in self.test_eps], dtype=np.int16),
+                    support=np.stack([e[2] for e in self.test_eps]),
+                    query=np.stack([e[3] for e in self.test_eps]),
+                    classes=np.array([e[4] for e in self.test_eps]),
+                )
             if self.args.mem and self.args.dump_edges:
                 np.savez_compressed(
                     os.path.join(self.args.out_dir, "edges_test.npz"),

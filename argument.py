@@ -39,6 +39,8 @@ def parse_args():
     parser.add_argument("--mem_arms", type=str, default="all", choices=["all", "none"], help="evaluate correction arms A/B")
     parser.add_argument("--dump_edges", action="store_true", help="dump per-edge test diagnostics to out_dir/edges_test.npz")
     parser.add_argument("--dump_emb", action="store_true", help="dump full-graph GCN embedding at the best-valid epoch to out_dir/emb_best.npy")
+    parser.add_argument("--dump_test_eps", action="store_true", help="dump sampled test episodes to out_dir/test_eps.npz")
+    parser.add_argument("--gcn_layers", type=int, default=1, choices=[1, 2], help="1: original GCN; 2: two-layer variant (T06b)")
 
     return parser.parse_known_args()
 
@@ -92,6 +94,8 @@ def config2string(args):
             "mem_arms",
             "dump_edges",
             "dump_emb",
+            "dump_test_eps",
+            "gcn_layers",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_
