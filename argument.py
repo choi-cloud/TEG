@@ -49,6 +49,10 @@ def parse_args():
     parser.add_argument("--pres_loss", type=str, default="kl", choices=["kl", "mse", "infonce"], help="T09 auxiliary loss form")
     parser.add_argument("--fixed_eval", action="store_true", help="T07 fixed-episode evaluation of the selected checkpoint")
     parser.add_argument("--gcn_layers", type=int, default=1, choices=[1, 2], help="1: original GCN; 2: two-layer variant (T06b)")
+    parser.add_argument("--neg_sampler", type=str, default="uniform", choices=["uniform", "emb_rwr", "bsc_rwr"], help="T14 infonce batch sampler")
+    parser.add_argument("--rwr_alpha", type=float, default=0.1, help="T14 RWR restart probability")
+    parser.add_argument("--rwr_k", type=int, default=10, help="T14 # of neighbours in the RWR k-NN graph")
+    parser.add_argument("--referee_k", type=int, default=0, help="T14 referee: mask negatives among A_hat^2 X top-k neighbours (0: off)")
 
     return parser.parse_known_args()
 
@@ -112,6 +116,10 @@ def config2string(args):
             "fixed_eval",
             "pres_teacher_hops",
             "pres_loss",
+            "neg_sampler",
+            "rwr_alpha",
+            "rwr_k",
+            "referee_k",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_

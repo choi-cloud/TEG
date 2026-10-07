@@ -17,6 +17,7 @@ import scipy.sparse as scipy_sparse
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from memory import RelationMemory
 from argument import config2string, parse_args
+import bsc_sampler
 
 def diffusion_teacher(features, edges, hops=2):
     """T07/T09 teacher: row-normalized A_hat^hops X (hops = 0 -> X), A_hat = gcn_norm(edge_index, add_self_loops=True).
@@ -75,6 +76,8 @@ class teg_trainer(embedder):
                         lin.bias.uniform_(-bound, bound, generator=self.aug_gen)
                 self.pres_head = head.to(self.device)
                 self.optim.add_param_group({"params": self.pres_head.parameters()})
+                # T14 BSC: sampler / referee / diagnostics state (dedicated generator 14000 + seed; no global RNG)
+                self.bsc_init(set_seed)
 
         if args.mem:
             self.memory = RelationMemory(args.mem_k, args.mem_tau, args.mem_chunk, self.device)
@@ -201,6 +204,73 @@ class teg_trainer(embedder):
         perm = torch.randperm(len(self.pres_pool_idx), generator=self.pres_gen)[: self.args.pres_m]
         return self.pres_pool_idx[perm].to(self.device)
 
+    def bsc_init(self, set_seed):
+        args = self.args
+        self.bsc_on = True
+        self.pool_dev = self.pres_pool_idx.to(self.device)
+        self.pool_pos = torch.full((len(self.labels),), -1, dtype=torch.long, device=self.device)
+        self.pool_pos[self.pool_dev] = torch.arange(len(self.pool_dev), device=self.device)
+        valid = set(int(c) for c in self.class_list_valid)
+        self.bsc_base_classes = [c for c in self.class_list_train if int(c) not in valid]  # base (training) labels only
+        self.bsc_rng = np.random.default_rng(14000 + set_seed) if args.neg_sampler != "uniform" else None
+        self.bsc_ref_nb = None
+        if args.referee_k > 0:
+            H = torch.from_numpy(diffusion_teacher(self.features, self.edges, 2)).to(self.device)[self.pool_dev]
+            self.bsc_ref_nb = bsc_sampler.referee_neighbors(H, args.referee_k)
+        self.bsc_groups, self.bsc_graph, self.bsc_epoch_info, self.bsc_steps, self.cur_epoch = None, None, None, [], 0
+
+    def bsc_epoch_setup(self):
+        """Before the first step of training epochs 1-10: base prototypes, pool assignment and (rwr samplers) the k-NN graph,
+        from z = LayerNorm(GCN output) in eval mode, no_grad, inside fork_rng; train mode is restored afterwards."""
+        with torch.random.fork_rng(devices=[self.device]):
+            self.conv.eval()
+            self.egnn.eval()
+            with torch.no_grad():
+                z = self.egnn.LayerNorm(self.conv(self.features, self.edges))
+                protos = torch.stack([z[self.id_by_class[c]].mean(0) for c in self.bsc_base_classes])
+                protos = F.normalize(protos, dim=1)
+                zp = z[self.pool_dev]
+                groups = (F.normalize(zp, dim=1) @ protos.T).argmax(1)
+                self.bsc_groups = groups
+                g_np = groups.cpu().numpy()
+                sizes = np.bincount(g_np)
+                sizes = sizes[sizes > 0]
+                info = {"n_groups": int(len(sizes)), "group_size_median": float(np.median(sizes))}
+                if self.args.neg_sampler == "emb_rwr":
+                    indptr, indices, st = bsc_sampler.knn_graph(zp, self.args.rwr_k)
+                    self.bsc_graph = (indptr, indices)
+                    info.update({"n_isolated": st["n_isolated"], "n_edges_undirected": st["n_edges_undirected"]})
+                elif self.args.neg_sampler == "bsc_rwr":
+                    indptr, indices, st = bsc_sampler.knn_graph(zp, self.args.rwr_k, g_np)
+                    self.bsc_graph = (indptr, indices)
+                    info.update({"n_isolated": st["n_isolated"], "n_edges_undirected": st["n_edges_undirected"]})
+            self.conv.train()
+            self.egnn.train()
+        self.bsc_epoch_info = info
+
+    def _pres_batch(self):
+        """T14: infonce batch (global ids) and referee mask. uniform: the original _pres_sample (generator 7000 + seed)."""
+        jumps = None
+        if self.args.neg_sampler == "uniform":
+            idx = self._pres_sample()
+        elif self.bsc_graph is None:
+            # epoch 0 (no update, no graph): uniform draw from the dedicated BSC generator
+            local = self.bsc_rng.choice(len(self.pres_pool_idx), size=min(self.args.pres_m, len(self.pres_pool_idx)), replace=False)
+            idx = self.pool_dev[torch.from_numpy(local).to(self.device)]
+        else:
+            local, jumps = bsc_sampler.rwr_batch(*self.bsc_graph, self.args.pres_m, self.args.rwr_alpha, self.bsc_rng)
+            idx = self.pool_dev[torch.from_numpy(local).to(self.device)]
+        mask = None
+        if self.bsc_ref_nb is not None:
+            local_np = self.pool_pos[idx].cpu().numpy()
+            mask = bsc_sampler.referee_mask(local_np, self.bsc_ref_nb, len(self.pres_pool_idx), self.device)
+        if self.bsc_groups is not None:
+            with torch.no_grad():
+                st = bsc_sampler.pair_stats(self.labels[idx], self.bsc_groups[self.pool_pos[idx]], mask)
+            st["jumps"] = jumps
+            self.bsc_steps.append(st)
+        return idx, mask
+
     def _pres_mse(self, embeddings):
         """mean_{i != j} (cos(z_i, z_j) - cos(h_i, h_j))^2 on m pool nodes (same z and teacher as kl)."""
         idx = self._pres_sample()
@@ -226,14 +296,17 @@ class teg_trainer(embedder):
 
     def _pres_infonce(self):
         """GRACE-style two-view InfoNCE (inter- and intra-view negatives, temperature 0.5, both directions) on m pool nodes."""
-        idx = self._pres_sample()
+        idx, mask = self._pres_batch()
         h1 = F.normalize(self.pres_head(self.egnn.LayerNorm(self._view_embedding()[idx])), dim=1)
         h2 = F.normalize(self.pres_head(self.egnn.LayerNorm(self._view_embedding()[idx])), dim=1)
         eye = torch.eye(len(idx), dtype=torch.bool, device=self.device)
 
         def one_side(a, b):
             between = a @ b.T / 0.5
-            refl = (a @ a.T / 0.5).masked_fill(eye, float("-inf"))
+            if mask is not None:
+                # T14 referee: masked negative pairs (diagonal = positives never masked)
+                between = between.masked_fill(mask, float("-inf"))
+            refl = (a @ a.T / 0.5).masked_fill(eye if mask is None else eye | mask, float("-inf"))
             denom = torch.logsumexp(torch.cat([between, refl], dim=1), dim=1)
             return (denom - between.diagonal()).mean()
 
@@ -360,6 +433,11 @@ class teg_trainer(embedder):
         else:
             self.conv.eval()
             self.egnn.eval()
+
+        if mode == "train" and getattr(self, "bsc_on", False):
+            self.cur_epoch = epoch
+            if epoch != 0:
+                self.bsc_epoch_setup()
 
         if mode == "train" or mode == "valid":
             loss_epoch = 0
@@ -606,6 +684,7 @@ class teg_trainer(embedder):
         for epoch in tqdm(range(self.args.epochs + 1)):
 
             self.pres_epoch = []
+            self.bsc_steps = []
             acc_train, f1_train = self.train_epoch("train", self.args.episodes, epoch)
 
             with torch.no_grad():
@@ -636,6 +715,15 @@ class teg_trainer(embedder):
             )
             if self.args.pres_lambda > 0:
                 self.epoch_records[-1]["pres_loss_mean"] = float(np.mean(self.pres_epoch))
+            if getattr(self, "bsc_on", False):
+                # T14 batch diagnostics (epoch mean over the epoch's batches; labels for diagnostics only)
+                diag = {k: None for k in ("fn_rate", "same_proto_rate", "masked_frac", "jumps")}
+                if self.bsc_steps:
+                    for k in ("fn_rate", "same_proto_rate", "masked_frac"):
+                        diag[k] = float(np.mean([st[k] for st in self.bsc_steps]))
+                    if self.bsc_steps[0]["jumps"] is not None:
+                        diag["jumps"] = float(np.mean([st["jumps"] for st in self.bsc_steps]))
+                self.epoch_records[-1]["bsc"] = diag | {"graph": self.bsc_epoch_info if epoch != 0 else None}
             if self.args.mem:
                 pooled = {"mem_size": len(self.memory), "auc_phat_pooled": None, "auc_dist_pooled": None}
                 pooled.update({"auc_phat_pooled_" + key: None for key in self.mem_keys} | {"auc_dfinal_pooled": None})
