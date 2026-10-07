@@ -4,6 +4,7 @@
 
 ## 0. 프로젝트 한 줄
 TEG(Kim et al., KDD 2023) 공식 코드 위에 "관계 메모리"(학습 에피소드의 노드 쌍 관계를 기록해 두고 평가 시점에 조회해 보정)를 붙여, 원본 TEG와 짝지어 비교한다. 설계 문서: `docs/relation_textbook_methodology_v0.md`.
+T07 이후 주제: TEG에 레이블 없는 노드 보조 손실(보존·대조)을 더하는 실험, 다음은 Blind-Spot Contrast(BSC). 관계 메모리는 T01–T05 범위.
 
 ## 1. 리포 상태
 - 원본: sung-won-kim/TEG → 원격(`origin`) `choi-cloud/TEG`(https://github.com/choi-cloud/TEG.git, 공동 연구 저장소). 환경 구축 커밋 `a37c0bf`.
@@ -43,6 +44,7 @@ TEG(Kim et al., KDD 2023) 공식 코드 위에 "관계 메모리"(학습 에피�
 - 한 프로세스에 seed 하나(`--num_seed 1`, `--seed k`).
 
 ## 5. 실험 프로토콜
+이 절은 T01–T06 기준이다. T07 이후의 표준은 §8을 따른다.
 - 데이터셋 3개 × 5-way {1, 5}-shot × seed {0,1,2,3,4}. query 5, epochs 10, episodes 50(학습 task 500), valid·test 50 에피소드/에폭, γ 0.5, EGNN 2층, anchor 16 — 전부 TEG 기본값.
 - 주 지표: TEG 방식의 **valid 최고 에폭의 test 정확도**(`test_acc_at_best_valid`, 동점 시 나중 에폭으로 갱신되는 원본 규칙 그대로). 설정(arm)마다 따로 계산한다.
 - 비교: 같은 seed끼리 짝지은 차 d_i = arm(i) − off(i). mean(d), SE = sd(d)/√5, 부호 일치 수.
@@ -68,3 +70,28 @@ TEG(Kim et al., KDD 2023) 공식 코드 위에 "관계 메모리"(학습 에피�
 - GPU 3번 사용. 동시 실행 6개 초과.
 - 원본 `random` 상태에 새 호출 끼워 넣기.
 - 결과 해석.
+
+## 8. 현행 표준 (T07 이후)
+- **별칭**: 원본 = TEG(λ = 0), 보존 = `kl_h2`(선택 λ), 대조 = `infonce`(선택 λ), D = 행 정규화 Â²X 코사인 프로토타입, +D = α = 0.5 사후 결합(`tools/fusion_baseline.py`).
+- **평가**: `--fixed_eval`로 seed당 고정 test 에피소드 200개(`Random(9000 + seed)`)와 valid 100개(`Random(9100 + seed)`)를 쓴다. 비교는 같은 에피소드끼리의 짝지은 차로 하고, "분명"은 평균 > 0이고 > 2·SE인 경우다. 원 보고 방식(`test_acc_at_best_valid`)은 병기한다.
+- **λ 선택**: (변형, 데이터셋, shot)마다 원본 `best_acc_valid`의 seed 평균이 최고인 λ를 고른다. 동률이면 작은 λ를 고른다.
+- **게이트 diff 기준**: 지시서의 "변경 범위" 게이트는 **그 지시서 착수 시점의 HEAD** 기준으로 계산한다.
+- **전용 난수 오프셋 등록부**(seed에 더함):
+
+  | 오프셋 | 용도 |
+  |---|---|
+  | 1000 | probe 에피소드 |
+  | 2000 | rand·pca 분석 공간 |
+  | 3000 | base 분할(T06b) |
+  | 4000 | 순열(T06b) |
+  | 5000 | T08·T08b 분석 |
+  | 7000 | 보존 표본 |
+  | 8000 | 대조 증강 |
+  | 9000 / 9100 | 고정 test / valid |
+  | 11000 / 12000 | T11 (리포 밖 패치에서만 사용, 미실행) |
+  | 13000 | T13 게이트 |
+  | **14000–14999** | BSC 예약 |
+
+  등록부 밖 기존 값: utils.py 원본 seed(TEG 원본 동작), analyze_t06b.py PCA random_state=0(T06b 기록값). 새 코드에서는 쓰지 않는다.
+
+  새 코드는 등록부에 없는 오프셋을 쓰지 않는다. 새로 쓸 오프셋은 지시서에 명시한 뒤 여기에 추가한다.
