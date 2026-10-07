@@ -6,7 +6,7 @@
 TEG(Kim et al., KDD 2023) 공식 코드 위에 "관계 메모리"(학습 에피소드의 노드 쌍 관계를 기록해 두고 평가 시점에 조회해 보정)를 붙여, 원본 TEG와 짝지어 비교한다. 설계 문서: `docs/relation_textbook_methodology_v0.md`.
 
 ## 1. 리포 상태
-- 원본: sung-won-kim/TEG → fork `Dragor0123/TEG`. 환경 구축 커밋 `a37c0bf`.
+- 원본: sung-won-kim/TEG → 원격(`origin`) `choi-cloud/TEG`(https://github.com/choi-cloud/TEG.git, 공동 연구 저장소). 환경 구축 커밋 `a37c0bf`.
 - conda 환경 `python310`: torch 2.5.1+cu121, torch-geometric 2.8.0.post1. 재설치 시 `PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu121` 필요. (TEG 명세는 torch 1.10.1 / PyG 2.0.3 — 버전 차이를 알고 쓴다.)
 - 데이터: `dataset/` (gitignore). 이번 실험 대상은 `Amazon_clothing`, `Amazon_electronics`, `dblp`.
 - 결과: `results/<지시서>/...` (gitignore). 요약표·보고서는 `reports/` (커밋).
