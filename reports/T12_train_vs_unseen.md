@@ -7,10 +7,11 @@
   - 실행 묶음 시작 전 여유가 1.5 GB 미만이면, 조건을 만족하는 가장 오래된 실험의 `emb_best.npy`부터 지워 3 GB 이상을 확보한다. 대상이 없으면 멈추고 보고한다.
 - **`.gitignore`:** 이미 `results/`가 있어 변경하지 않았다.
 - **커밋 메시지:** `docs: CLAUDE.md deletion rule (user decision), gitignore results/`.
-- **push 결과(force 없음): 거부.**
-  - 브랜치: `git push origin preserve_rehearse dual_view_trust novel_like_class` → `remote: Permission to choi-cloud/TEG.git denied to Dragor0123.` / `fatal: unable to access 'https://github.com/choi-cloud/TEG.git/': The requested URL returned error: 403`(exit 128).
-  - 태그: `git push origin --tags` → 같은 403 거부(exit 128).
-  - 원격 브랜치·태그에 반영된 것 없음. `origin` = `https://github.com/choi-cloud/TEG.git`(원격 설정은 변경하지 않음).
+- **push 결과(force 없음): 성공.** 원격 `origin` = `https://github.com/choi-cloud/TEG.git`(원격 설정 변경 없음).
+  - 경과: 첫 시도에서는 계정 `Dragor0123`에 쓰기 권한이 없어 HTTP 403으로 거부됐다. 원격 저장소 협업 초대를 수락한 뒤(2026-10-07) 같은 명령으로 다시 push해 성공했다.
+  - 브랜치: `git push origin preserve_rehearse dual_view_trust novel_like_class` → 새 브랜치 3개. 원격 HEAD `preserve_rehearse` `fe34c7a`, `dual_view_trust` `2f8e1da`, `novel_like_class` `ee3ef3e`(로컬과 같음).
+  - 태그: `git push origin --tags` → 새 태그 14개(`t01`, `t02`, `t03a`, `t03b`, `t04`, `t05`, `t06`, `t06b`, `t07`, `t08`, `t08b`, `t09`, `t10r`, `t12`).
+  - `git ls-remote --heads --tags origin`으로 원격 반영을 확인했다. 원격에 있던 `main`(`5aec558`)은 그대로다.
 - **T11 파일:** `tools/run_t11.py`, `tools/analyze_t11.py`는 커밋하지 않고 그대로 두었다.
 
 ## 2. T12 변경 파일과 정의
@@ -123,8 +124,8 @@
 | P73 | R_gap ≥ 5/6 (보존, 대조 모두) | 보존 6/6, 대조 6/6 | 일치 |
 
 ## 6. 이상 징후
-1. push가 403으로 거부됐다(1절). CLAUDE.md §1은 fork를 `Dragor0123/TEG`로 적고 있고, `origin`은 `choi-cloud/TEG`를 가리킨다.
-2. 작업 트리에 `dataset/ogbn_arxiv/mapping/README.md` 삭제(`D`)가 있다. 2026-10-07 13:29 KST에 `git restore`로 복원한 뒤 다시 삭제된 상태로 발견됐다(이번 작업에서 삭제하지 않음). 커밋에 포함하지 않았다.
+1. CLAUDE.md §1은 fork를 `Dragor0123/TEG`로 적고 있고, `origin`은 `choi-cloud/TEG`를 가리킨다(push는 `choi-cloud/TEG`로 수행).
+2. T12 작업 시작 시 작업 트리에 `dataset/ogbn_arxiv/mapping/README.md` 삭제(`D`)가 있었다(13:29 KST `git restore` 이후 다시 삭제된 상태, 이번 작업에서 삭제하지 않음, 커밋에 포함하지 않음). 이후 `dataset/ogbn_arxiv/`가 다시 생성되어(19:54 KST) README는 HEAD와 같은 내용으로 존재하고 `git status`의 삭제 표시는 없어졌다. 같은 시기에 `dataset/cora/`도 다시 생겼다(이번 작업에서 만들지 않음).
 3. 표 1의 train seed 간 sd는 1.25–5.01%p다(예: 원본 Amazon_clothing 5-shot 91.21 ± 5.01). train은 학습 모드·step 전 출력 기록 값이다.
 4. 표 2의 Â²X는 행 정규화 후 support 평균을 프로토타입으로 쓴다. T06b 표 B1의 `diff2`는 정규화 전 Â²X를 `fewshot_acc`에 넣었다. 1-shot은 같은 값이 나오고(예: Amazon_clothing 1-shot test 85.24), 5-shot은 다르다(예: Amazon_clothing 5-shot test 92.82 vs T06b 92.54).
 5. 표 2 선택 λ(T09, seed 3개)와 표 1 선택 λ(T10r, seed 10개)는 일부 셀에서 다르다(예: Amazon_clothing 5-shot 보존 10 vs 1).
