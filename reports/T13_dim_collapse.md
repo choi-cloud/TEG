@@ -243,3 +243,9 @@
 8. test 그룹 노드 수는 seed 간 같다(Amazon_clothing 9,360, dblp 9,747, Amazon_electronics 10,216). base·valid 노드 수는 seed마다 다르다.
 9. 표 1·2는 G별 하위 표로, 표 2는 erank_cls(2a)와 BW(2b) 하위 표로 나눠 배치했다(값의 정의는 지시서와 같음).
 10. 표 5는 `reports/T12_summary.md` 표 2의 원본·보존·대조 열 문자열을 그대로 옮겼다(재계산 없음).
+
+## 부기 (2026-10-07, push 결과)
+- 커밋 `a3c4212`, 태그 `t13`(`a3c4212`).
+- `git push origin preserve_rehearse` → `c340a4c..a3c4212`. `git push origin t13` → new tag. force 없음.
+- `git ls-remote` 확인: `refs/heads/preserve_rehearse` = `refs/tags/t13` = `a3c4212`.
+- 이 부기는 별도 커밋이며, 태그 `t13`은 `a3c4212`에 남아 있다.
