@@ -307,3 +307,9 @@ R3(a) 기록 (20개 생성기 평균; 거리 또는 std, 괄호는 점프 수):
 9. **B5:** 0/6. BSC(sel) − 대조 train 정확도 차는 −3.39 ~ −14.72%p다.
 10. **표 3 진단의 정의:** `uni` 행은 배치 구성에 쓰이지 않는 배정을 같은 방식으로 계산한 값이다. 이를 위해 uni run에서도 에폭마다 eval forward(`fork_rng` 안)가 1회 추가된다.
 11. **점검용 결과 위치:** R2 run 결과는 `results/T14/_checks/`에 복사했다(gitignore).
+
+## 부기 (2026-10-08, 커밋·push·Gd)
+- 결과 커밋 `e821ae2`, 태그 `t14`(`e821ae2`).
+- push(force 없음): `git push origin blind_spot_contrast` → `4036981..e821ae2`, `git push origin t14` → new tag. `git ls-remote` 확인: `refs/heads/blind_spot_contrast` = `refs/tags/t14` = `e821ae2`.
+- Gd: `git diff --stat 4036981 e821ae2`의 파일은 `argument.py`, `bsc_sampler.py`, `instructions/T14_bsc_E1.md`, `model.py`, `reports/T14_bsc_E1.md`, `reports/T14_summary.md`, `tools/analyze_t14.py`, `tools/check_t14_r2.py`, `tools/check_t14_rwr.py`, `tools/check_t14_uniform.py`, `tools/run_t14.py`(11개, 지정 범위 안) — 통과.
+- 이 부기는 별도 커밋이며, 태그 `t14`는 `e821ae2`에 남아 있다.
