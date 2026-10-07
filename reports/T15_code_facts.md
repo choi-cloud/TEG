@@ -235,3 +235,10 @@
 3. **태그 표기:** 개정 CLAUDE.md §1의 "태그" 줄은 `t07`, `t08b`, `t09`, `t10r`, `t12`, `t13`, `t14`이고, 저장소의 태그는 `t01`–`t14` 16개(I절)다.
 4. **`dump_embedding`의 모드:** `dump_embedding`(`model.py:176`)은 `conv.eval()`만 하고 `egnn` 모드와 이후 모드를 되돌리지 않는다. 다음 `train_epoch` 시작에서 모드가 다시 설정된다(`model.py:425–435`).
 5. **valid 손실:** valid 모드에서도 L_N·L_G를 계산하지만(`model.py:558–565`) 그 값은 사용되지 않는다.
+
+## 부기 (2026-10-08, 커밋·push)
+- 보고서 커밋 `41d7ecb`(`report: T15 code facts`), 태그 `t15`(`41d7ecb`).
+- 코드 파일 변경 0: `git diff --stat fa547c5 41d7ecb` = `reports/T15_code_facts.md` 1개(237줄 추가).
+- push(force 없음): `git push -u origin erasure_diagnosis` → 새 브랜치, `git push origin t15` → 새 태그.
+- `git ls-remote` 확인: `refs/heads/erasure_diagnosis` = `refs/tags/t15` = `41d7ecb`.
+- 이 부기는 별도 커밋이며, 태그 `t15`는 `41d7ecb`에 남아 있다.
