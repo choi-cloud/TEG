@@ -154,3 +154,8 @@ G8 (run당 시간, s, `_runs.jsonl`):
 6. **게이트 run의 추가 플래그.** 게이트 run은 지시서 설정에 `--dump_logits`를 더해 실행했다(에피소드 비교용 덤프).
 7. **probe 에피소드 생성 방식.** M3 probe 에피소드는 `Random(1000 + seed)` 한 인스턴스로 base → valid → test 순서로 만들었다(지시서 "그룹별로 한 번만"의 구현).
 8. **시스템 시각 표기.** 드라이버 로그 시각은 UTC로 찍혀 있다(예: 17:39 = 02:39 KST).
+
+## 부기 (2026-10-08, 커밋·push·G7)
+- 보고서 커밋 `e851a9f`(태그 없음, 게이트 G3(c) 실패).
+- push(force 없음): `git push origin erasure_diagnosis` → `e1bec02..e851a9f`.
+- G7: `git diff --stat a8a67bf e851a9f`의 파일은 `argument.py`, `model.py`, `reports/T16a_impl_facts.md`, `tools/analyze_t16a.py`, `tools/erasure_metrics.py`, `tools/t16a_facts.py`, `tools/t16a_gate_run.py`, `tools/t16a_relabel_check.py`, `tools/t16a_run_gates.py`(9개)다. `configuration.yaml`, `layers/`, `embedder.py`는 변경 없음 — 충족.
