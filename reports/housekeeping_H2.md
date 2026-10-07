@@ -81,3 +81,15 @@
 1. 4단계 명령(`git switch -c t11_wip`, T11 파일 2개 커밋, `git push -u origin t11_wip`, `git switch preserve_rehearse`)을 Claude가 실행하려 했을 때 Claude Code auto mode 권한 분류기가 거부했다(사유 표기: "Out-of-Place Publication", 실행 전 차단). 같은 명령을 사용자가 직접 실행했다.
 2. T13 보고서 이상 징후 1(T06b pca1 `random_state=0`)과 같은 값이 등록부 밖 값으로 4절에 나온다. 사용자 지시로 §8 등록부 아래에 기존 값으로 기록했다.
 3. 4절의 5000(`analyze_t08.py`, `analyze_t08b.py`)은 점검 당시 등록부 밖이었고, 사용자 지시로 등록부에 추가했다.
+
+## 부기 (2026-10-08, 5·6단계 결과와 게이트)
+- 5단계 커밋: `cecc750`(`preserve_rehearse`). 변경 파일은 `CLAUDE.md`, `instructions/H2_housekeeping_pre_bsc.md`, `reports/housekeeping_H2.md`다.
+- 5단계 push: `git push origin preserve_rehearse` → `421a430..cecc750`(force 없음).
+- 6단계: `cecc750`에서 `blind_spot_contrast`를 만들었다. `git push -u origin blind_spot_contrast` → 새 브랜치. 코드 변경 없음.
+
+| 게이트 | 조건 | 관측 | 결과 |
+|---|---|---|---|
+| G1 | 5의 커밋 변경 파일이 `CLAUDE.md`, `instructions/`, `reports/`뿐(기준 착수 시점 HEAD `421a430`) | `git diff --name-only 421a430 cecc750`: `CLAUDE.md`, `instructions/H2_housekeeping_pre_bsc.md`, `reports/housekeeping_H2.md` | 통과 |
+| G2 | 전체 `*.py` 변경이 `t11_wip`의 T11 파일 2개뿐 | `421a430..cecc750` `*.py` 변경 0개. `421a430..t11_wip(06b7d30)` `*.py` 변경은 `tools/analyze_t11.py`, `tools/run_t11.py` | 통과 |
+| G3 | 부기 커밋 전 브랜치 `blind_spot_contrast`, 작업 트리 깨끗 | 브랜치 `blind_spot_contrast`, `git status --short` 출력 없음 | 통과 |
+| G4 | 부기 push 후 `git ls-remote origin`의 세 브랜치 = 로컬 해시 | 확인 직전 로컬 해시: `preserve_rehearse` `cecc750`, `t11_wip` `06b7d30`, `blind_spot_contrast` = 이 부기 커밋(부모 `cecc750`). 확인 결과는 채팅 보고에 적는다(이 파일은 부기 커밋에 포함되므로 자기 해시를 담을 수 없다) | 부기 push 후 확인 |
