@@ -18,6 +18,7 @@ from torch_geometric.nn.conv.gcn_conv import gcn_norm
 from memory import RelationMemory
 from argument import config2string, parse_args
 import bsc_sampler
+import hashlib
 
 def diffusion_teacher(features, edges, hops=2):
     """T07/T09 teacher: row-normalized A_hat^hops X (hops = 0 -> X), A_hat = gcn_norm(edge_index, add_self_loops=True).
@@ -40,17 +41,37 @@ MEM_EP_KEYS = ["n_edges", "auc_phat", "auc_dist", "mean_phat_same", "mean_phat_d
 class teg_trainer(embedder):
     def __init__(self, args, conf, set_seed):
         embedder.__init__(self, args, conf, set_seed)
+        # T16a --gcn_out: 0 (default) keeps the configuration.yaml values
+        gcn_out = args.gcn_out if args.gcn_out > 0 else conf["gcn_out"]
+        egnn_in = args.gcn_out if args.gcn_out > 0 else conf["egnn_in"]
         if args.gcn_layers == 2:
             # T06b variant model; --gcn_layers 1 (default) keeps the original line below
-            self.conv = GCN2(self.features.shape[1], 64, conf["gcn_out"], args.dropout).to(self.device)
+            self.conv = GCN2(self.features.shape[1], 64, gcn_out, args.dropout).to(self.device)
         else:
-            self.conv = GCN(self.features.shape[1], conf["gcn_out"], args.dropout).to(self.device)
-        self.egnn = EGNN(self.structural_features.shape[1], conf["egnn_in"], n_layers=args.n_layers).to(self.device)
+            self.conv = GCN(self.features.shape[1], gcn_out, args.dropout).to(self.device)
+        self.egnn = EGNN(self.structural_features.shape[1], egnn_in, n_layers=args.n_layers).to(self.device)
 
-        self.optim = optim.Adam([{"params": self.conv.parameters()}, {"params": self.egnn.parameters()}], lr=args.lr, weight_decay=5e-4)
+        # T16a --optim / --weight_decay (defaults: Adam, 5e-4 = the original constant)
+        opt_cls = optim.AdamW if args.optim == "adamw" else optim.Adam
+        self.optim = opt_cls([{"params": self.conv.parameters()}, {"params": self.egnn.parameters()}], lr=args.lr, weight_decay=args.weight_decay)
 
         self.config_str = config2string(args)
         self.set_seed = set_seed
+
+        # T16a --relabel_base: base-class node lists shuffled with random.Random(15000 + seed) and re-cut with the original
+        # class order and sizes; valid/test lists and the labels array are unchanged (no global RNG)
+        self.relabel_label = None
+        if args.relabel_base:
+            base_cls = list(self.class_list_train)
+            pooled = [n for c in base_cls for n in self.id_by_class[c]]
+            random.Random(15000 + set_seed).shuffle(pooled)
+            self.relabel_label = self.labels.cpu().numpy().copy()
+            pos = 0
+            for c in base_cls:
+                size = len(self.id_by_class[c])
+                self.id_by_class[c] = pooled[pos : pos + size]
+                self.relabel_label[self.id_by_class[c]] = int(c)
+                pos += size
 
         if args.pres_lambda > 0:
             # T07 Preserve: fixed teacher, node pool, dedicated sampler (no global RNG)
@@ -68,14 +89,14 @@ class teg_trainer(embedder):
                 # T09 GRACE-style baseline: augmentation generator, projection head (64 -> 64 -> 64, ELU) in the same optimizer
                 self.aug_gen = torch.Generator().manual_seed(8000 + set_seed)
                 with torch.random.fork_rng(devices=[self.device]):
-                    head = nn.Sequential(nn.Linear(conf["gcn_out"], 64), nn.ELU(), nn.Linear(64, 64))
+                    head = nn.Sequential(nn.Linear(gcn_out, 64), nn.ELU(), nn.Linear(64, 64))
                 for lin in (head[0], head[2]):
                     bound = 1.0 / math.sqrt(lin.in_features)
                     with torch.no_grad():
                         lin.weight.uniform_(-bound, bound, generator=self.aug_gen)
                         lin.bias.uniform_(-bound, bound, generator=self.aug_gen)
                 self.pres_head = head.to(self.device)
-                self.optim.add_param_group({"params": self.pres_head.parameters()})
+                self.optim.add_param_group({"params": self.pres_head.parameters(), "weight_decay": args.weight_decay})
                 # T14 BSC: sampler / referee / diagnostics state (dedicated generator 14000 + seed; no global RNG)
                 self.bsc_init(set_seed)
 
@@ -418,9 +439,131 @@ class teg_trainer(embedder):
         stats = self.mem_stats(res["p_hat"].cpu().numpy(), res["neg_dist"], res["same"], res["top1_sim"].cpu().numpy())
         return {"epoch": 1, "train_ep_idx": int(ep_idx), "n_edges": stats["n_edges"], "auc_phat": stats["auc_phat"], "top1_sim_mean": stats["mean_top1_sim"]}
 
+    # ------------------------------------------------------------------ T16a measurement hook / gradient probe
+    def traj_setup(self):
+        """Once before training (no global RNG): groups, probe episodes (Random(1000 + seed), base -> valid -> test, 200 each),
+        fixed valid/test episodes (Random(9100/9000 + seed), as run_fixed_eval), A_hat X nonzero pattern (M8/M9)."""
+        import sys as _sys
+
+        _tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
+        if _tools not in _sys.path:
+            _sys.path.append(_tools)
+        import erasure_metrics as em
+
+        self.em = em
+        lab = self.labels.cpu().numpy()
+        self.traj_groups, by_class = {}, {}
+        for g, cl in (("base", self.class_list_train), ("valid", self.class_list_valid), ("test", self.class_list_test)):
+            cl = list(cl)
+            nodes = np.where(np.isin(lab, [int(c) for c in cl]))[0]
+            self.traj_groups[g] = (cl, nodes, lab[nodes])
+            for c in cl:
+                by_class[c] = np.where(lab == int(c))[0].tolist()
+        rng = random.Random(1000 + self.set_seed)
+        self.traj_probe_eps = {g: em.episodes(rng, self.traj_groups[g][0], by_class, self.k_shot, 200) for g in ("base", "valid", "test")}
+        self.traj_fixed = {"test": self.fixed_episodes(random.Random(9000 + self.set_seed), self.class_list_test, 200),
+                           "valid": self.fixed_episodes(random.Random(9100 + self.set_seed), self.class_list_valid, 100)}
+        X = scipy_sparse.csr_matrix(self.features.cpu().numpy())
+        ei, w = gcn_norm(self.edges.cpu(), None, X.shape[0], add_self_loops=True)
+        ei, w = ei.numpy(), w.numpy()
+        A = scipy_sparse.csr_matrix((w, (ei[1], ei[0])), shape=(X.shape[0], X.shape[0]))
+        AX = (A @ X).tocsr()
+        AX.eliminate_zeros()
+        self.traj_ax = AX
+        nz = (AX != 0).astype(np.float64)
+        unused = np.concatenate([self.traj_groups["valid"][1], self.traj_groups["test"][1]])
+        self.traj_freq_base = np.asarray(nz[self.traj_groups["base"][1]].mean(0)).ravel()
+        self.traj_freq_unused = np.asarray(nz[unused].mean(0)).ravel()
+        self.traj_touch = np.zeros(X.shape[1], dtype=np.int64)
+        self.traj_total = self.args.episodes * self.args.epochs
+        assert self.traj_total % self.args.traj_every == 0, (self.traj_total, self.args.traj_every)
+        self.traj_rec, self.traj_colnorm, self.traj_bias, self.traj_z, self.traj_loss_buf = [], [], [], {}, []
+
+    def traj_measure(self, step):
+        em = self.em
+        with torch.random.fork_rng(devices=[self.device]):
+            tc, te = self.conv.training, self.egnn.training
+            self.conv.eval()
+            self.egnn.eval()
+            with torch.no_grad():
+                z_t = self.conv(self.features, self.edges)
+                zln_t = self.egnn.LayerNorm(z_t)
+                W = self.conv.conv1.lin.weight
+                colnorm = W.norm(dim=0).cpu().numpy().astype(np.float32)
+                bias = float(self.conv.conv1.bias.norm()) if getattr(self.conv.conv1, "bias", None) is not None else None
+            self.conv.train(tc)
+            self.egnn.train(te)
+        z = z_t.cpu().numpy()
+        rec = {"step": step}
+        for g in ("base", "valid", "test"):
+            _, nodes, y = self.traj_groups[g]
+            rec[f"purity_{g}"] = em.knn_purity(z_t, nodes, y, k=10)
+            rec[f"probe_{g}"] = em.fewshot_acc(z, self.traj_probe_eps[g], self.k_shot)
+            if g != "base":
+                rec[f"purity_ln_{g}"] = em.knn_purity(zln_t, nodes, y, k=10)
+        for g in ("valid", "test"):
+            rec[f"proto_euc_{g}"] = 100 * float(em.proto_euc_acc(z, self.traj_fixed[g], self.k_shot).mean())
+            if self.args.traj_lr:
+                rec[f"cos_{g}"] = 100 * float(em.proto_cos_acc(z, self.traj_fixed[g], self.k_shot).mean())
+                rec[f"lr_{g}"] = 100 * float(em.lr_acc(z, self.traj_fixed[g], self.k_shot).mean())
+        if self.traj_loss_buf:
+            for key in ("L_N", "L_G", "pres"):
+                vals = [b[key] for b in self.traj_loss_buf if b[key] is not None]
+                rec[f"loss_{key}"] = float(np.mean(vals)) if vals else None
+        else:
+            rec.update({"loss_L_N": None, "loss_L_G": None, "loss_pres": None})
+        self.traj_loss_buf = []
+        rec["bias_norm"] = bias
+        self.traj_rec.append(rec)
+        self.traj_colnorm.append(colnorm)
+        if self.args.traj_dump_ends and step in (0, self.traj_total):
+            self.traj_z[f"z_step{step}"] = z.astype(np.float32)
+
+    def grad_probe(self, L_N, L_G, sup, pres_term):
+        """Gradient norms at the current update step (before backward; retain_graph=True; no parameter change)."""
+        gcn = list(self.conv.named_parameters())
+        gp = [p for _, p in gcn]
+        ep = list(self.egnn.parameters())
+        g, sc, wd = self.args.gamma, self.args.sup_coef, self.args.weight_decay
+
+        def grads(t, params):
+            out = torch.autograd.grad(t, params, retain_graph=True, allow_unused=True)
+            return [torch.zeros_like(p) if x is None else x for x, p in zip(out, params)]
+
+        tnorm = lambda gs: float(torch.sqrt(sum((x.double() ** 2).sum() for x in gs)))
+        terms = {"L_N": L_N, "L_G": L_G, "gamma_L_N": sc * g * L_N, "oneminus_gamma_L_G": sc * (1 - g) * L_G, "sup": sup}
+        if pres_term is not None:
+            terms["lambda_pres"] = pres_term
+        rec = {"step": self.upd_step + 1, "gcn": {}, "egnn": {}}
+        gcn_grads = {}
+        for name, t in terms.items():
+            gs = grads(t, gp)
+            gcn_grads[name] = gs
+            rec["gcn"][name] = {pn: float(x.double().norm()) for (pn, _), x in zip(gcn, gs)}
+        for name in ("L_N", "L_G", "gamma_L_N", "oneminus_gamma_L_G", "sup"):
+            rec["egnn"][name] = tnorm(grads(terms[name], ep))
+        rec["gcn"]["wd_theta"] = {pn: float((wd * p.detach().double()).norm()) for pn, p in gcn}
+        # supervised gradient on W = conv1.lin.weight, per feature column
+        wi = [i for i, (pn, _) in enumerate(gcn) if pn.endswith("conv1.lin.weight")][0]
+        Gw = gcn_grads["sup"][wi].double()
+        Wd = gcn[wi][1].detach().double()
+        coln = Gw.norm(dim=0)
+        wdn = (wd * Wd).norm(dim=0)
+        q = torch.tensor([0.1, 0.5, 0.9], dtype=torch.float64, device=coln.device)
+        rec["sup_W_cols"] = {"n_cols": int(coln.numel()), "n_zero": int((coln == 0).sum()), "frac_zero": float((coln == 0).double().mean()),
+                             "q10_50_90": torch.quantile(coln, q).tolist(), "wd_q10_50_90": torch.quantile(wdn, q).tolist()}
+        # relative difference checks used by T16a G5
+        rec["rel_sup_vs_gammaLN"] = {pn: float((a - b).double().norm() / max(float(a.double().norm()), 1e-30))
+                                     for (pn, _), a, b in zip(gcn, gcn_grads["sup"], gcn_grads["gamma_L_N"])}
+        self.grad_probe_rec.append(rec)
+
     def train_epoch(self, mode, n_episode, epoch):
 
         loss_fn = torch.nn.NLLLoss()
+
+        if self.t16_on:
+            # T16a: hash of the global random state at the start of each train/valid/test pass (read only)
+            self.rng_hashes.append({"mode": mode, "epoch": epoch, "sha1": hashlib.sha1(repr(random.getstate()).encode()).hexdigest()})
 
         if mode == "train":
             if epoch != 0:
@@ -447,6 +590,9 @@ class teg_trainer(embedder):
         self.arm_scores = {name: [] for name in ["off"] + [a[0] for a in (self.mem_arms if self.args.mem else [])]}
 
         for episode in range(n_episode):
+
+            if mode == "train" and epoch != 0 and self.args.traj_every > 0 and self.upd_step == 0 and not self.traj_rec:
+                self.traj_measure(0)  # T16a: step 0 = right before the first update
 
             if mode == "train":
                 self.optim.zero_grad()
@@ -553,7 +699,11 @@ class teg_trainer(embedder):
 
             # _________________________
             # Relabeling for meta-tasks
-            label_list = torch.LongTensor([class_selected.index(i) for i in self.labels[id_query]]).to(self.device)
+            if mode == "train" and self.relabel_label is not None:
+                # T16a --relabel_base: training labels follow the shuffled base lists (labels array unchanged)
+                label_list = torch.LongTensor([class_selected.index(int(i)) for i in self.relabel_label[id_query]]).to(self.device)
+            else:
+                label_list = torch.LongTensor([class_selected.index(i) for i in self.labels[id_query]]).to(self.device)
 
             if mode == "train" or mode == "valid":
 
@@ -563,17 +713,35 @@ class teg_trainer(embedder):
                 loss_l2_train = loss_fn(output_gcn, label_list)  # Graph Embedder Loss
 
                 loss_train = self.args.gamma * loss_l1_train + (1 - self.args.gamma) * loss_l2_train
+                if self.args.sup_coef != 1.0:
+                    # T16a --sup_coef (default 1.0: no multiplication)
+                    loss_train = self.args.sup_coef * loss_train
+                sup_loss = loss_train
 
+            pres_term = None
             if mode == "train" and self.args.pres_lambda > 0:
                 # T07 Preserve: lambda * L_pres on the same forward's full-node GCN output
                 pres = self.pres_loss(embeddings)
-                loss_train = loss_train + self.args.pres_lambda * pres
+                pres_term = self.args.pres_lambda * pres
+                loss_train = loss_train + pres_term
                 self.pres_epoch.append(float(pres.detach()))
 
             if mode == "train":
                 if epoch != 0:
+                    if self.grad_probe_steps and (self.upd_step + 1) in self.grad_probe_steps:
+                        self.grad_probe(loss_l1_train, loss_l2_train, sup_loss, pres_term)
                     loss_train.backward()
                     self.optim.step()
+                    self.upd_step += 1
+                    if self.args.traj_every > 0:
+                        # T16a: loss record (M7), touch count (M8; support and query rows of A_hat X), measurement point
+                        self.traj_loss_buf.append({"L_N": float(loss_l1_train.detach()), "L_G": float(loss_l2_train.detach()),
+                                                   "pres": float(pres.detach()) if pres_term is not None else None})
+                        rows = np.unique(np.concatenate([np.asarray(id_support), np.asarray(id_query)]))
+                        sub = self.traj_ax[rows]
+                        np.add.at(self.traj_touch, sub.indices, 1)
+                        if self.upd_step % self.args.traj_every == 0:
+                            self.traj_measure(self.upd_step)
                 else:
                     self.optim.zero_grad()
 
@@ -680,6 +848,15 @@ class teg_trainer(embedder):
         self.logit_dump = []
         self.pres_epoch = []
         self.ckpt, self.ckpt_epoch, self.fixed_recheck = None, None, None
+        # T16a state (all off by default)
+        self.upd_step = 0
+        self.grad_probe_steps = set(int(x) for x in self.args.grad_probe_steps.split(",") if x.strip())
+        self.grad_probe_rec = []
+        self.t16_on = self.args.traj_every > 0 or bool(self.grad_probe_steps)
+        self.rng_hashes = []
+        self.traj_rec = []
+        if self.args.traj_every > 0:
+            self.traj_setup()
 
         for epoch in tqdm(range(self.args.epochs + 1)):
 
@@ -816,6 +993,22 @@ class teg_trainer(embedder):
                     f,
                     indent=2,
                 )
+            if self.t16_on:
+                info = {"rng_hashes": self.rng_hashes, "n_updates": self.upd_step,
+                        "conv_params": {n: list(p.shape) for n, p in self.conv.named_parameters()}}
+                with open(os.path.join(self.args.out_dir, "t16_info.json"), "w") as f:
+                    json.dump(info, f)
+            if self.grad_probe_rec:
+                with open(os.path.join(self.args.out_dir, "grad_probe.json"), "w") as f:
+                    json.dump(self.grad_probe_rec, f)
+            if self.args.traj_every > 0:
+                with open(os.path.join(self.args.out_dir, "traj.json"), "w") as f:
+                    json.dump({"steps": [r["step"] for r in self.traj_rec], "records": self.traj_rec}, f)
+                np.savez_compressed(os.path.join(self.args.out_dir, "traj_w.npz"), colnorm=np.stack(self.traj_colnorm),
+                                    touch_count=self.traj_touch, freq_base=self.traj_freq_base.astype(np.float32),
+                                    freq_unused=self.traj_freq_unused.astype(np.float32))
+                if self.args.traj_dump_ends:
+                    np.savez_compressed(os.path.join(self.args.out_dir, "traj_z_ends.npz"), **self.traj_z)
             with open(os.path.join(self.args.out_dir, "episodes.jsonl"), "w") as f:
                 for rec in self.episode_records:
                     f.write(json.dumps(rec) + "\n")

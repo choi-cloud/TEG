@@ -53,6 +53,15 @@ def parse_args():
     parser.add_argument("--rwr_alpha", type=float, default=0.1, help="T14 RWR restart probability")
     parser.add_argument("--rwr_k", type=int, default=10, help="T14 # of neighbours in the RWR k-NN graph")
     parser.add_argument("--referee_k", type=int, default=0, help="T14 referee: mask negatives among A_hat^2 X top-k neighbours (0: off)")
+    parser.add_argument("--sup_coef", type=float, default=1.0, help="T16a: multiplier on the supervised loss (1.0: no multiplication)")
+    parser.add_argument("--weight_decay", type=float, default=5e-4, help="T16a: optimizer weight decay (original constant 5e-4)")
+    parser.add_argument("--optim", type=str, default="adam", choices=["adam", "adamw"], help="T16a: optimizer")
+    parser.add_argument("--gcn_out", type=int, default=0, help="T16a: >0 overrides gcn_out and egnn_in of configuration.yaml")
+    parser.add_argument("--relabel_base", type=int, default=0, choices=[0, 1], help="T16a: shuffle base-class node lists (Random(15000 + seed))")
+    parser.add_argument("--traj_every", type=int, default=0, help="T16a: measurement hook every K updates (0: off)")
+    parser.add_argument("--traj_lr", type=int, default=0, choices=[0, 1], help="T16a: add cosine / logistic-regression probes (M5)")
+    parser.add_argument("--traj_dump_ends", type=int, default=0, choices=[0, 1], help="T16a: save z at step 0 and the last step")
+    parser.add_argument("--grad_probe_steps", type=str, default="", help="T16a: comma-separated update steps (1-based) for gradient probes")
 
     return parser.parse_known_args()
 
@@ -120,6 +129,15 @@ def config2string(args):
             "rwr_alpha",
             "rwr_k",
             "referee_k",
+            "sup_coef",
+            "weight_decay",
+            "optim",
+            "gcn_out",
+            "relabel_base",
+            "traj_every",
+            "traj_lr",
+            "traj_dump_ends",
+            "grad_probe_steps",
         ]:
             st_ = "{}_{}_".format(name, val)
             st += st_
