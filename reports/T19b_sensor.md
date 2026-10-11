@@ -185,3 +185,8 @@
 4. **대조의 ρ_50:** S4에서 대조의 ρ_50은 Amazon_electronics 두 셀에서 음수다(−0.0459, −0.0543).
 5. **dep_k 동점:** dep_k는 이산값이다(k개 이웃의 교집합 크기). Hb 행렬에서 dep_10 값 300개 중 297개가 다른 값과 같았다. Spearman·AUROC는 평균 순위로 동점을 처리했다.
 6. **이웃 재정렬:** 동점이 가져온 후보(K_max + 1 + 64) 밖까지 이어진 행은 전체 후보로 다시 정렬했다(Clothing 13, Electronics 106).
+
+## 부기 (2026-10-11, 커밋·push·Hc)
+- 보고서 커밋 `2b5637a`, 태그 `t19b`(`2b5637a`).
+- push(force 없음): `git push origin m1_sensor_check` → `1cfba72..2b5637a`, `git push origin t19b` → 새 태그. `git ls-remote`: `refs/heads/m1_sensor_check` = `refs/tags/t19b` = `2b5637a`.
+- Hc: `git diff --stat 1cfba72 2b5637a`의 파일은 `reports/T19b_example.png`, `reports/T19b_sensor.md`, `reports/T19b_summary.md`, `tools/analyze_t19.py`(4개) — 충족.
