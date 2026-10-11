@@ -439,6 +439,273 @@ def t19a_report():
     print(json.dumps(gates, indent=1, ensure_ascii=False))
 
 
+# ================================================================== T19b (E2 sensor check)
+OUT19B = os.path.join(ROOT, "results", "T19b")
+KB = [10, 20, 50, 100]
+RVIEWS = ["AX", "A2X", "X"]
+ZV = ["원본", "대조", "rand1"]
+
+
+def jaccard_dep(A, B):
+    """A, B: [n, k] neighbour id arrays (distinct within a row). dep = 1 - |A∩B| / |A∪B|."""
+    k = A.shape[1]
+    C = np.sort(np.concatenate([A, B], axis=1), axis=1)
+    inter = (C[:, 1:] == C[:, :-1]).sum(1)
+    return 1.0 - inter / (2 * k - inter)
+
+
+def node_purity(nb, lab, k=10):
+    return (lab[nb[:, :k]] == lab[:, None]).mean(1)
+
+
+def spearman(x, y):
+    from scipy.stats import rankdata
+
+    rx, ry = rankdata(x), rankdata(y)
+    rx, ry = rx - rx.mean(), ry - ry.mean()
+    den = math.sqrt(float((rx ** 2).sum()) * float((ry ** 2).sum()))
+    return float((rx * ry).sum() / den) if den > 0 else None
+
+
+def auroc(score, pos):
+    """Mann-Whitney AUROC with average ranks (ties count 1/2). None if one class is empty."""
+    from scipy.stats import rankdata
+
+    pos = np.asarray(pos, bool)
+    n1, n0 = int(pos.sum()), int((~pos).sum())
+    if n1 == 0 or n0 == 0:
+        return None
+    r = rankdata(score)
+    return float((r[pos].sum() - n1 * (n1 + 1) / 2) / (n1 * n0))
+
+
+def sensor_stats(nbZ, nbR, lab, gid):
+    U = np.where((gid == 1) | (gid == 2))[0]
+    dp = node_purity(nbR, lab) - node_purity(nbZ, lab)
+    out = {"dp_const_U": bool(np.all(dp[U] == dp[U][0]))}
+    isU = (gid == 1) | (gid == 2)
+    for k in KB:
+        dep = jaccard_dep(nbZ[:, :k], nbR[:, :k])
+        out[str(k)] = {"rho": None if out["dp_const_U"] else spearman(dep[U], dp[U]),
+                       "auc_drop": auroc(dep[U], dp[U] > 0), "auc_grp": auroc(dep, isU),
+                       "mean_dep": {g: float(dep[gid == i].mean()) for i, g in enumerate(GROUPS)}}
+    return out, dp
+
+
+def topk_all(Z, kmax=100):
+    Zn = normed(Z)
+    nb, _, short = knn_sorted(Zn, np.arange(Zn.shape[0]), kmax)
+    del Zn
+    torch.cuda.empty_cache()
+    return nb, short
+
+
+def t19b_run(ds):
+    os.makedirs(OUT19B, exist_ok=True)
+    t0 = time.time()
+    fv = fixed_views(ds)
+    rv, _ = rand1_views(ds)
+    shorts = {}
+    nbR = {}
+    for r in RVIEWS:
+        nbR[r], shorts[r] = topk_all(fv[r])
+    del fv
+    rec = {"dataset": ds, "runs": {}, "time": {}}
+    for s in SEEDS:
+        nb_rand, shorts[f"rand1|{s}"] = topk_all(rv[s])
+        for k in SHOTS:
+            for z in ZV:
+                if z == "rand1":
+                    sp, lab = split_of(run_dir("base", ds, k, s))
+                    nbZ = nb_rand
+                else:
+                    d = run_dir(RUNV[z], ds, k, s)
+                    sp, lab = split_of(d)
+                    nbZ, shorts[f"{z}|{k}|{s}"] = topk_all(np.load(os.path.join(d, "emb_best.npy")))
+                gid = group_ids(sp, lab)
+                for r in RVIEWS:
+                    st, dp = sensor_stats(nbZ, nbR[r], lab, gid)
+                    rec["runs"][f"{z}|{r}|{k}|{s}"] = st
+                    if ds == "Amazon_clothing" and k == 1 and s == 0 and z == "원본" and r == "AX":
+                        np.savez_compressed(os.path.join(OUT19B, "example_nodes.npz"), dep_10=jaccard_dep(nbZ[:, :10], nbR[r][:, :10]),
+                                            dep_50=jaccard_dep(nbZ[:, :50], nbR[r][:, :50]), dp=dp, group=gid)
+        print(ds, "seed", s, "done", round(time.time() - t0), flush=True)
+    rec["margin_rows_reordered"] = shorts
+    rec["time"]["total_sec"] = time.time() - t0
+    json.dump(rec, open(os.path.join(OUT19B, f"{ds}.json"), "w"))
+
+
+def t19b_gate_hb():
+    """Hb: dep_k, Spearman, AUROC on a deterministic 300-node matrix vs brute force / scipy.stats."""
+    from scipy.stats import spearmanr
+
+    n, d = 300, 12
+    i = np.arange(n)[:, None].astype(np.float64)
+    j = np.arange(d)[None, :].astype(np.float64)
+    Z = np.sin(0.9 * i + 1.1 * j + 0.013 * i * j)
+    R = np.cos(0.5 * i + 0.8 * j) + 0.2 * np.sin(0.031 * i * (j + 2))
+    Z[200:230] = Z[0:30]
+    lab = (np.arange(n) * 3) % 7
+    gid = np.arange(n) % 3
+    nbZ, _ = topk_all(Z, 50)
+    nbR, _ = topk_all(R, 50)
+
+    def brute_nb(M, a, k):
+        V = M / np.linalg.norm(M, axis=1, keepdims=True)
+        c = np.array([x for x in range(n) if x != a])
+        sc = V[c] @ V[a]
+        return c[np.lexsort((c, -sc))[:k]]
+
+    res = {}
+    for k in (10, 50):
+        mine = jaccard_dep(nbZ[:, :k], nbR[:, :k])
+        brute = np.array([1 - len(set(brute_nb(Z, a, k)) & set(brute_nb(R, a, k))) / len(set(brute_nb(Z, a, k)) | set(brute_nb(R, a, k))) for a in range(n)])
+        res[f"dep_{k}_maxabs"] = float(np.abs(mine - brute).max())
+    dep = jaccard_dep(nbZ[:, :10], nbR[:, :10])
+    dp = node_purity(nbR, lab) - node_purity(nbZ, lab)
+    res["spearman_absdiff"] = abs(spearman(dep, dp) - float(spearmanr(dep, dp).correlation))
+    pos = dp > 0
+    P, Nn = dep[pos], dep[~pos]
+    brute_auc = float(((P[:, None] > Nn[None, :]).sum() + 0.5 * (P[:, None] == Nn[None, :]).sum()) / (len(P) * len(Nn)))
+    res["auroc_absdiff"] = abs(auroc(dep, pos) - brute_auc)
+    res["n_dep_ties"] = int(len(dep) - len(np.unique(dep)))
+    res["pass"] = all(v <= 1e-9 for kk, v in res.items() if kk.endswith(("maxabs", "absdiff")))
+    os.makedirs(OUT19B, exist_ok=True)
+    json.dump(res, open(os.path.join(OUT19B, "gate_hb.json"), "w"), indent=1)
+    print(json.dumps(res, indent=1))
+
+
+def t19b_report():
+    R = {ds: json.load(open(os.path.join(OUT19B, f"{ds}.json"))) for ds in DATASETS}
+    HB = json.load(open(os.path.join(OUT19B, "gate_hb.json")))
+    get = lambda ds, z, r, k, s: R[ds]["runs"][f"{z}|{r}|{k}|{s}"]
+    undefined = []
+
+    def vals(ds, z, r, k, kk, key):
+        out = []
+        for s in SEEDS:
+            v = get(ds, z, r, k, s)[str(kk)][key]
+            if v is None:
+                undefined.append((ds, z, r, k, s, kk, key))
+            out.append(v)
+        return out
+
+    def msd(xs, fmt="{:.4f}"):
+        xs = [x for x in xs if x is not None]
+        if not xs:
+            return "정의 안 됨", None
+        return f"{fmt.format(np.mean(xs))} ± {fmt.format(np.std(xs, ddof=1) if len(xs) > 1 else float('nan'))}", float(np.mean(xs))
+
+    RN = {"AX": "ÂX", "A2X": "Â²X", "X": "X"}
+    L = ["# T19b 요약 — E2: 레이블 없는 센서의 타당성 (학습 없음)", ""]
+    L.append("- dep_k(i; Z, R) = 1 − Jaccard(N_Z(i), N_R(i)), 전체 노드 top-k(행 L2 정규화 코사인, 자기 제외, 동점: 유사도 내림차순·노드 인덱스 오름차순). "
+             "dp = pur_i(R) − pur_i(Z), pur_i = top-10 같은 레이블 비율(평가만). U = valid ∪ test 노드. seed 평균 ± sd.")
+    L.append("")
+    for tname, rs in (("T1·T2 — R = ÂX", ["AX"]), ("T3 — R = Â²X, R = X", ["A2X", "X"])):
+        for r in rs:
+            L.append(f"## {tname}: ρ_k, AUC_drop_k (R = {RN[r]})")
+            L.append("| 데이터셋 | shot | Z | " + " | ".join(f"ρ_{k}" for k in KB) + " | " + " | ".join(f"AUC_drop_{k}" for k in KB) + " |")
+            L.append("|---|---|---|" + "---|" * (2 * len(KB)))
+            for ds in DATASETS:
+                for k in SHOTS:
+                    for z in ZV:
+                        L.append(f"| {ds} | {k} | {z} | " + " | ".join(msd(vals(ds, z, r, k, kk, "rho"))[0] for kk in KB) + " | "
+                                 + " | ".join(msd(vals(ds, z, r, k, kk, "auc_drop"))[0] for kk in KB) + " |")
+            L.append("")
+            L.append(f"### AUC_grp_k (R = {RN[r]}) 와 원본 − rand1 (seed 짝지은 차, 평균 ± SE, 부호 일치 수/5)")
+            L.append("| 데이터셋 | shot | " + " | ".join(f"{z} {kk}" for z in ZV for kk in KB) + " | " + " | ".join(f"원본−rand1 {kk}" for kk in KB) + " |")
+            L.append("|---|---|" + "---|" * (len(ZV) * len(KB) + len(KB)))
+            for ds in DATASETS:
+                for k in SHOTS:
+                    L.append(f"| {ds} | {k} | " + " | ".join(msd(vals(ds, z, r, k, kk, "auc_grp"))[0] for z in ZV for kk in KB) + " | "
+                             + " | ".join(paired(vals(ds, "원본", r, k, kk, "auc_grp"), vals(ds, "rand1", r, k, kk, "auc_grp"))[0] for kk in KB) + " |")
+            L.append("")
+    L.append("## T4 — mean_dep_k(g) (R = ÂX, k = 10, 50, seed 평균)")
+    L.append("| 데이터셋 | shot | Z | " + " | ".join(f"{g} {kk}" for kk in (10, 50) for g in GROUPS) + " |")
+    L.append("|---|---|---|" + "---|" * 6)
+    for ds in DATASETS:
+        for k in SHOTS:
+            for z in ZV:
+                L.append(f"| {ds} | {k} | {z} | " + " | ".join(f"{np.mean([get(ds, z, 'AX', k, s)[str(kk)]['mean_dep'][g] for s in SEEDS]):.4f}" for kk in (10, 50) for g in GROUPS) + " |")
+    L.append("")
+    S = {"S1": 0, "S1p": 0, "S2": 0, "S3": 0}
+    s4 = []
+    for ds in DATASETS:
+        for k in SHOTS:
+            r50 = msd(vals(ds, "원본", "AX", k, 50, "rho"))[1]
+            r10 = msd(vals(ds, "원본", "AX", k, 10, "rho"))[1]
+            S["S1"] += r50 is not None and r50 > 0
+            S["S1p"] += r50 is not None and r50 >= 0.2
+            S["S2"] += r50 is not None and r10 is not None and r50 > r10
+            _, m, se = paired(vals(ds, "원본", "AX", k, 50, "auc_grp"), vals(ds, "rand1", "AX", k, 50, "auc_grp"))
+            S["S3"] += m > 0 and m > 2 * se
+            s4.append((ds, k, msd(vals(ds, "대조", "AX", k, 50, "rho"))[0], msd(vals(ds, "대조", "AX", k, 50, "auc_grp"))[0]))
+    L.append("## 판정 (값만, Z = 원본, R = ÂX, seed 평균)")
+    L.append("| 판정 | 정의 | 값 |")
+    L.append("|---|---|---|")
+    L.append(f"| S1 | ρ_50 > 0 | {S['S1']}/6 |")
+    L.append(f"| S1' (기록) | ρ_50 ≥ 0.2 | {S['S1p']}/6 |")
+    L.append(f"| S2 | ρ_50 > ρ_10 | {S['S2']}/6 |")
+    L.append(f"| S3 | AUC_grp_50 원본 − rand1 분명히 양수 | {S['S3']}/6 |")
+    L.append("")
+    L.append("### S4 (기록) — 대조의 ρ_50, AUC_grp_50 (R = ÂX)")
+    L.append("| 데이터셋 | shot | ρ_50 | AUC_grp_50 |")
+    L.append("|---|---|---|---|")
+    for ds, k, a, b in s4:
+        L.append(f"| {ds} | {k} | {a} | {b} |")
+    L.append("")
+    L.append("## 그림 1")
+    L.append("- `reports/T19b_example.png`: Amazon_clothing 1-shot seed 0, Z = 원본, R = ÂX, U 노드의 dep_50 십분위별 dp 평균.")
+    L.append("")
+    L.append("## 사전 등록 대비")
+    L.append("| 예측 | 내용 | 관측 | 일치·어긋남 |")
+    L.append("|---|---|---|---|")
+    yn = lambda b: "일치" if b else "어긋남"
+    L.append(f"| P104 | S1 ≥ 5/6, 그리고 S1' ≥ 3/6 | S1 {S['S1']}/6, S1' {S['S1p']}/6 | {yn(S['S1'] >= 5 and S['S1p'] >= 3)} |")
+    L.append(f"| P105 | S2 ≥ 4/6 | {S['S2']}/6 | {yn(S['S2'] >= 4)} |")
+    L.append(f"| P106 | S3 ≥ 5/6 | {S['S3']}/6 | {yn(S['S3'] >= 5)} |")
+    open(os.path.join(ROOT, "reports", "T19b_summary.md"), "w").write("\n".join(L) + "\n")
+    # figure 1
+    E = np.load(os.path.join(OUT19B, "example_nodes.npz"))
+    U = (E["group"] == 1) | (E["group"] == 2)
+    dep, dpu = E["dep_50"][U], E["dp"][U]
+    order = np.lexsort((np.arange(len(dep)), dep))
+    bins = np.array_split(order, 10)
+    means = [float(dpu[b].mean()) for b in bins]
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(6, 3.5))
+        ax.bar(np.arange(1, 11), means)
+        ax.set_xlabel("dep_50 decile (U nodes)")
+        ax.set_ylabel("mean dp = pur(AX) - pur(Z)")
+        ax.set_title("Amazon_clothing 1-shot seed 0, Z = base (T14), R = AX")
+        fig.tight_layout()
+        fig.savefig(os.path.join(ROOT, "reports", "T19b_example.png"), dpi=120)
+        fig_ok = True
+    except ImportError:
+        fig_ok = False
+
+    def allfinite(o):
+        if isinstance(o, dict):
+            return all(allfinite(v) for v in o.values())
+        if isinstance(o, list):
+            return all(allfinite(v) for v in o)
+        if isinstance(o, float):
+            return math.isfinite(o)
+        return True
+
+    gates = {"Hb": HB, "Hd_finite": {ds: allfinite(R[ds]["runs"]) for ds in DATASETS}, "undefined": sorted(set(map(str, undefined))),
+             "dp_const_U": [kk for ds in DATASETS for kk, v in R[ds]["runs"].items() if v["dp_const_U"]], "S": S,
+             "figure": fig_ok, "decile_means": means, "time": {ds: R[ds]["time"] for ds in DATASETS},
+             "margin_rows_reordered": {ds: sum(R[ds]["margin_rows_reordered"].values()) for ds in DATASETS}}
+    json.dump(gates, open(os.path.join(OUT19B, "gate_checks.json"), "w"), indent=1, ensure_ascii=False)
+    print(json.dumps(gates, indent=1, ensure_ascii=False))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "t19a-gates":
@@ -447,3 +714,9 @@ if __name__ == "__main__":
         t19a_run(sys.argv[2])
     elif cmd == "t19a-report":
         t19a_report()
+    elif cmd == "t19b-gates":
+        t19b_gate_hb()
+    elif cmd == "t19b-run":
+        t19b_run(sys.argv[2])
+    elif cmd == "t19b-report":
+        t19b_report()
