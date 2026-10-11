@@ -305,3 +305,8 @@
 6. **첫 실행과 재실행:** 첫 실행(17:13–17:23)에서는 동점이 가져온 후보 밖까지 이어진 행(Amazon_clothing 76, Amazon_electronics 72, dblp 0; 그룹 제한 포함)을 다시 정렬하지 않았다. 해당 행의 전체 재정렬을 추가해 재실행했고, 재실행 값은 첫 실행 값과 모든 지표에서 같았다. 첫 실행 출력은 `results/T19a/first_pass/`에 남겼다.
 7. **frac_unassigned / frac_tie:** `frac_unassigned`는 모든 관점·그룹·K에서 0이다. `frac_tie` 최대값은 Amazon_clothing 0.373, Amazon_electronics 0.272, dblp 0.028이다(T4).
 8. **Q2:** dblp 5-shot의 원본 − ÂX(base, K = 10)는 +0.0002 ± 0.0011(2/5)이며 seed 평균 기준으로 Q2에 포함됐다.
+
+## 부기 (2026-10-11, 커밋·push·Gd)
+- 보고서 커밋 `d9d9d7f`, 태그 `t19a`(`d9d9d7f`).
+- push(force 없음): `git push -u origin m1_sensor_check` → 새 브랜치, `git push origin t19a` → 새 태그. `git ls-remote`: `refs/heads/m1_sensor_check` = `refs/tags/t19a` = `d9d9d7f`.
+- Gd: `git diff --stat 6bdac9b d9d9d7f`의 파일은 `reports/T19a_purity.md`, `reports/T19a_summary.md`, `tools/analyze_t19.py`(3개) — 충족.
