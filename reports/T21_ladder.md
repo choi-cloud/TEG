@@ -40,7 +40,7 @@
 | Hc(1) 재현 | ep200 base 학습 정확도 \|Δ\| = 0.000 %p (9/9). ep0–200 정확도 최대 \|Δ\| 0, 손실 최대 \|Δ\| 0 |
 | Hc(2) | acc_test(k = 5) T21 − T12 표 2: S0 +0.004 / −0.001 / −0.004, S3 +0.003 / +0.005 / −0.003 (clothing / dblp / electronics) |
 | Hd | 18 run `config.gamma` = 0.0, `final.test_acc_at_best_valid` 기록됨 |
-| He | 부기 커밋에 기록 |
+| He | `git diff --stat 377d5f3 6fadbbc`: 7개 파일, 전부 `tools/run_t21.py`, `tools/ladder_t21.py`, `tools/analyze_t21.py`, `reports/`, `instructions/` 안 (701줄 추가, 삭제 0). 충족 |
 | Hf | 지표 909개 유한, 표현 행렬 전부 유한. 제외 run 없음 |
 
 ### 판정과 사전 등록 (값만; 표는 `reports/T21_summary.md`)
@@ -74,7 +74,7 @@
 | S1 학습·스냅샷 | 9/9, 스냅샷 7개 | 예 |
 | 표 T1–T5, 그림 1 | `reports/T21_summary.md`, `reports/T21_ladder.png` | 예 |
 | J1–J6, P107–P111 대조 | 위 표 | 예 |
-| 게이트 Ha–Hf | Hc(1)은 원 기준 실패, 사용자 부기 기준 충족. 나머지 충족(He는 부기 커밋) | 예(부기 기준) |
+| 게이트 Ha–Hf | Hc(1)은 원 기준 실패, 사용자 부기 기준 충족. 나머지 충족 | 예(부기 기준) |
 | 실행 시간·디스크 기록 | 2절 | 예 |
 | `results/T21/` `emb_best.npy` 유지 | 지우지 않음 | 예 |
 
@@ -89,3 +89,8 @@
 7. S0의 pur_test seed 간 sd가 0.0000이다(3 데이터셋). S0는 seed와 무관하고 test 클래스 집합이 seed 0–2에서 같다.
 8. 그림 1은 한글 글꼴이 없어(`DejaVu Sans`만 있음) 축·눈금 문자를 영어로 적었다(S3 = "TEG", 대조 = "InfoNCE λ=10"). y축은 0에서 시작하지 않는다(패널별 최소값 − 8).
 9. 분석은 CPU 3 프로세스로 48분 걸렸다(S0 고차원 표현의 probe·LR·순도).
+
+## 부기 (2026-10-14, push)
+
+- 보고서 커밋 `6fadbbc`, 태그 `t21`. `git push origin erasure_ladder` → `* [new branch] erasure_ladder -> erasure_ladder`, `git push origin t21` → `* [new tag] t21 -> t21`. `git ls-remote`: `refs/heads/erasure_ladder` = `refs/tags/t21` = `6fadbbc`. 강제 푸시 없음.
+- He: `git diff --stat 377d5f3 6fadbbc` = `instructions/T21_erasure_ladder.md`(+3), `reports/T21_ladder.md`, `reports/T21_ladder.png`, `reports/T21_summary.md`, `tools/analyze_t21.py`, `tools/ladder_t21.py`, `tools/run_t21.py`. 범위 안.
