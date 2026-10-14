@@ -31,6 +31,7 @@
 - 클래스 분할(base / valid / test)은 TEG `utils.load_data`가 seed별로 만드는 것을 그대로 쓴다. S3의 T09 run이 쓴 분할과 같아야 한다(`split.json` 또는 T09 run의 기록과 대조해 Hb에서 확인).
 - probe 에피소드: `analyze_t06b.episodes(random.Random(1000 + seed), classes, by_class, k)`, 그룹(base, valid, test)별로 한 번 뽑아 모든 표현이 공유한다. k ∈ {1, 5}, 에피소드 수는 `analyze_t06b.N_EPI`. T12 표 2와 같은 방식이다.
 - 모든 표현은 probe 전에 행 L2 정규화한다.
+  - (2026-10-14 부기) 적용하지 않음. T12와 같이 정규화 없이 fewshot_acc에 넣는다. S0은 입력 자체가 행 정규화돼 있다.
 
 ## 3. 실행
 
@@ -107,6 +108,8 @@
 | Hd γ = 0 회귀 | 18 run의 `run.json`에 `gamma: 0.0`. `test_acc_at_best_valid`가 기록됨 | 멈추고 보고 |
 | He 변경 범위 | `git diff --stat <H0> <보고서 커밋>`의 파일이 `tools/ladder_t21.py`, `tools/run_t21.py`, `tools/analyze_t21.py`, `reports/`, `instructions/` 안에만 있다 | 멈추고 보고 |
 | Hf 유한 | 모든 지표가 유한 | 해당 run 제외, 기록 |
+
+- (2026-10-14 부기, Hc(1)) 80 % 기준은 5-way 에피소드 정확도 감각으로 적은 것이며 80·91-way 전체 분류에는 맞지 않는다. 대체 기준: 세 데이터셋 모두 (i) 최종 에폭 base 학습 정확도가 에폭 0보다 40 %p 이상 높고 (ii) 학습 손실이 에폭 0 대비 단조 감소(스냅샷 에폭 기준).
 
 ## 8. 보고
 
