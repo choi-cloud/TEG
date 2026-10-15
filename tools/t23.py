@@ -931,6 +931,167 @@ def c_gates():
     print(json.dumps(out))
 
 
+def c_report():
+    import csv
+
+    VS = ["X", "AX", "A2X", "rand1", "SELF", "SHUF"]
+    D, metas = {}, {}
+    for ds, k in CELLS:
+        mp = os.path.join(OUT, "T23c", f"{ds}_5w{k}s", "meta.json")
+        if os.path.exists(mp):
+            metas[(ds, k)] = json.load(open(mp))
+        for s in SEEDS:
+            p = os.path.join(OUT, "T23c", f"{ds}_5w{k}s", f"seed{s}.csv")
+            if os.path.exists(p):
+                D[(ds, k, s)] = list(csv.DictReader(open(p)))
+    C1, C2, C3 = {}, {}, {}
+    for (ds, k, s), rows in D.items():
+        for r in rows:
+            if r["part"] == "C1":
+                C1[(ds, k, s, r["E"], r["V"], r["F"], r["group"])] = {x: float(r[x]) for x in ("auc_cos", "auc_c", "auc_s", "d_multi", "d_single")} | \
+                    {"conv": r["conv_c"] == "True" and r["conv_s"] == "True"}
+            elif r["part"] == "C2":
+                C2[(ds, k, s, r["E"], r["V"], r["F"], r["split"], r["score"])] = float(r["auc"])
+            elif r["part"] == "C3":
+                C3[(ds, k, int(r["decile"]), int(r["c"]))] = (float(r["frac_same"]), int(r["n"]))
+    full = lambda ds, k: all((ds, k, s) in D for s in SEEDS)
+    sv = lambda ds, k, E, V, F, key, g="test": [C1[(ds, k, s, E, V, F, g)][key] for s in SEEDS]
+
+    def bstar(ds, k, E, V, F):
+        best, bb = None, None
+        for b in BETAS:
+            m = np.mean([C2[(ds, k, s, E, V, F, "valid", f"S2_{b:g}")] for s in SEEDS])
+            if best is None or m > best:
+                best, bb = m, b
+        return bb
+
+    def dep(ds, k, E, V, F):
+        b = bstar(ds, k, E, V, F)
+        return [C2[(ds, k, s, E, V, F, "test", f"S2_{b:g}")] - C2[(ds, k, s, E, V, F, "test", "S2_0")] for s in SEEDS], b
+
+    L = ["# T23c 요약 — 일치 수 c의 추가 신호 (학습 없음)", ""]
+    L.append("- C-1: 그룹 anchor의 E top-50 이웃 쌍. AUC_cos = test 쌍 코사인 AUC. AUC_cos+c / cos+s = base 쌍으로 맞춘 로지스틱 회귀(표준화, lbfgs, C = 1)를 test 쌍에 적용. "
+             "ΔAUC_multi = AUC_cos+c − AUC_cos, ΔAUC_single = AUC_cos+s − AUC_cos. 값 = seed 평균 ± SE (부호 일치/3).")
+    L.append("- C-2: test(valid) 클래스 5-way 5-shot 에피소드 200개(`default_rng(17100 + s)` / `17200 + s`), support 25개 중 하나가 같은 클래스 4개를 나머지 20개보다 높게 매기는 AUC. "
+             "S0 = cos, S1 = c, S2(β) = cos + β·c/5. β* = valid S2 seed 평균 최대(동률이면 작은 β).")
+    L.append(f"- 완료된 run 파일: {len(D)}/18.")
+    L.append("")
+
+    def c1_table(F, title):
+        L.append(title)
+        L.append("| E | V | " + " | ".join(f"{ds} {k}" for ds, k in CELLS) + " |")
+        L.append("|---|---|" + "---|" * 6)
+        for E in ("TEGe", "CONe"):
+            for V in VS:
+                cols = []
+                for ds, k in CELLS:
+                    if not full(ds, k) or (ds, k, 0, E, V, F, "test") not in C1:
+                        cols.append("미실행")
+                        continue
+                    cols.append(f"AUC_cos {np.mean(sv(ds, k, E, V, F, 'auc_cos')):.4f}; Δmulti {fmt_ms(sv(ds, k, E, V, F, 'd_multi'))}; "
+                                f"Δsingle {fmt_ms(sv(ds, k, E, V, F, 'd_single'))}")
+                L.append(f"| {E} | {V} | " + " | ".join(cols) + " |")
+        L.append("")
+
+    c1_table("H", "## C1 — 주 표: C-1 노드 쌍, test, F = H")
+    c1_table("M", "## C2 — C-1 노드 쌍, test, F = M")
+    L.append("## C3 — 코사인 10분위 × c → 같은-클래스 비율 (쌍 수) (E = TEGe, V = AX, F = H, seed 0, test 쌍)")
+    for ds, k in CELLS:
+        if (ds, k, 1, 0) not in C3:
+            L.append(f"- {ds} {k}-shot: 미실행")
+            continue
+        L.append(f"### {ds} {k}-shot")
+        L.append("| 분위 | " + " | ".join(f"c={c}" for c in range(6)) + " |")
+        L.append("|---|" + "---|" * 6)
+        for d in range(1, 11):
+            L.append(f"| {d} | " + " | ".join(("—" if C3[(ds, k, d, c)][1] == 0 else f"{C3[(ds, k, d, c)][0]:.3f} ({C3[(ds, k, d, c)][1]})") for c in range(6)) + " |")
+        L.append("")
+    L.append("## C4 — C-2 에피소드, test, F = H: AUC(S0) / AUC(S1) / AUC(S2(β*)) / β* / ΔAUC_ep")
+    L.append("| E | V | " + " | ".join(f"{ds} {k}" for ds, k in CELLS) + " |")
+    L.append("|---|---|" + "---|" * 6)
+    for E in ("TEGe", "CONe"):
+        for V in VS:
+            cols = []
+            for ds, k in CELLS:
+                if not full(ds, k) or (ds, k, 0, E, V, "H", "test", "S1") not in C2:
+                    cols.append("미실행")
+                    continue
+                d, b = dep(ds, k, E, V, "H")
+                m = lambda sc: np.mean([C2[(ds, k, s, E, V, "H", "test", sc)] for s in SEEDS])
+                cols.append(f"{m('S2_0'):.4f} / {m('S1'):.4f} / {m(f'S2_{b:g}'):.4f} / β*={b:g} / {fmt_ms(d)}")
+            L.append(f"| {E} | {V} | " + " | ".join(cols) + " |")
+    L.append("")
+    L.append("## C5 — β 곡선 (E = TEGe, V = AX, F = H; seed 평균)")
+    L.append("| 셀 | 분할 | " + " | ".join(f"β={b:g}" for b in BETAS) + " |")
+    L.append("|---|---|" + "---|" * len(BETAS))
+    for ds, k in CELLS:
+        if not full(ds, k):
+            continue
+        for split in ("valid", "test"):
+            L.append(f"| {ds} {k} | {split} | " + " | ".join(f"{np.mean([C2[(ds, k, s, 'TEGe', 'AX', 'H', split, f'S2_{b:g}')] for s in SEEDS]):.4f}" for b in BETAS) + " |")
+    L.append("")
+    cnt = lambda fn: sum(1 for ds, k in CELLS if full(ds, k) and fn(ds, k))
+    S = {}
+    S["S1"] = cnt(lambda ds, k: clear_pos(sv(ds, k, "TEGe", "AX", "H", "d_multi")))
+    S["S2"] = cnt(lambda ds, k: clear_pos(np.array(sv(ds, k, "TEGe", "AX", "H", "d_multi")) - np.array(sv(ds, k, "TEGe", "AX", "H", "d_single"))))
+    S["S3"] = cnt(lambda ds, k: clear_pos(sv(ds, k, "TEGe", "SELF", "H", "d_multi")))
+    S["S4"] = cnt(lambda ds, k: (ds, k, 0, "CONe", "AX", "H", "test") in C1 and
+                  clear_pos(np.array(sv(ds, k, "TEGe", "AX", "H", "d_multi")) - np.array(sv(ds, k, "CONe", "AX", "H", "d_multi"))))
+    S["S5"] = cnt(lambda ds, k: clear_pos(dep(ds, k, "TEGe", "AX", "H")[0]))
+    S["S6_X"] = cnt(lambda ds, k: clear_pos(sv(ds, k, "TEGe", "X", "H", "d_multi")))
+    S["S6_rand1"] = cnt(lambda ds, k: clear_pos(sv(ds, k, "TEGe", "rand1", "H", "d_multi")))
+    S["S6_SHUF"] = cnt(lambda ds, k: clear_pos(sv(ds, k, "TEGe", "SHUF", "H", "d_multi")))
+    bd = {}
+    for ds, k in CELLS:
+        if not full(ds, k):
+            continue
+        for E in ("TEGe", "CONe"):
+            for V in VS:
+                for F in ("H", "M"):
+                    if (ds, k, 0, E, V, F, "valid", "S2_0") in C2:
+                        b = bstar(ds, k, E, V, F)
+                        bd[b] = bd.get(b, 0) + 1
+    S["S6_beta_dist"] = {f"{b:g}": n for b, n in sorted(bd.items())}
+    L.append("## 판정 (값만; test, F = H; 분명 = seed 평균 > 0, > 2·SE, 부호 3/3)")
+    L.append("| 판정 | 정의 | 값 |")
+    L.append("|---|---|---|")
+    for key, txt in (("S1", "ΔAUC_multi(TEGe, AX) 분명히 양수"), ("S2", "ΔAUC_multi(TEGe, AX) − ΔAUC_single(TEGe, AX) 분명히 양수"),
+                     ("S3", "ΔAUC_multi(TEGe, SELF) 분명히 양수"), ("S4", "ΔAUC_multi(TEGe, AX) − ΔAUC_multi(CONe, AX) 분명히 양수"),
+                     ("S5", "ΔAUC_ep(TEGe, AX) 분명히 양수")):
+        L.append(f"| {key} | {txt} | {S[key]}/6 |")
+    L.append(f"| S6 (기록) | ΔAUC_multi(TEGe, X / rand1 / SHUF) 분명히 양수 | {S['S6_X']}/6 / {S['S6_rand1']}/6 / {S['S6_SHUF']}/6 |")
+    L.append(f"| S6 β* 분포 (기록) | (E, V, F, 셀) 전체 | {S['S6_beta_dist']} |")
+    L.append("")
+    P = [("P121", "S1 ≥ 4/6", S["S1"] >= 4, S["S1"]), ("P122", "S2 ≥ 4/6", S["S2"] >= 4, S["S2"]), ("P123", "S3 ≤ 1/6", S["S3"] <= 1, S["S3"]),
+         ("P124", "S4 ≥ 4/6", S["S4"] >= 4, S["S4"]), ("P125", "S5 ≥ 4/6", S["S5"] >= 4, S["S5"])]
+    L.append("## 사전 등록 대조")
+    L.append("| 예측 | 조건 | 관측 | 일치 |")
+    L.append("|---|---|---|---|")
+    for p, c, ok, v in P:
+        L.append(f"| {p} | {c} | {p.replace('P121', 'S1').replace('P122', 'S2').replace('P123', 'S3').replace('P124', 'S4').replace('P125', 'S5')} = {v}/6 | {'일치' if ok else '어긋남'} |")
+    L.append("")
+    # gates Ib, Id, Ie
+    Ub = {}
+    for ds, k in CELLS:
+        for s in SEEDS:
+            p = os.path.join(OUT, "T23b", f"{ds}_5w{k}s", f"seed{s}.csv")
+            if os.path.exists(p):
+                for r in csv.DictReader(open(p)):
+                    if r["part"] == "U" and r["K"] == "10" and r["group"] == "test":
+                        Ub[(ds, k, s, r["E"])] = float(r["u"])
+    ib = [abs(x["u10_test"] - Ub[(ds, k, x["seed"], x["E"])]) for (ds, k), m in metas.items() for x in m["Ib"]]
+    idok = all(x["ok"] for m in metas.values() for x in m["Id"])
+    vals = [v for r in C1.values() for kk, v in r.items() if kk != "conv"] + list(C2.values())
+    nconv = sum(1 for r in C1.values() if not r["conv"])
+    G = {"Ib_max_absdiff": max(ib) if ib else None, "Ib_n": len(ib), "Id": idok, "Id_n_class_cand": sorted({(x["split"], x["n_class_cand"]) for m in metas.values() for x in m["Id"]}),
+         "Ie_finite": bool(np.all(np.isfinite(vals))), "Ie_nonconverged": nconv, "n_runs": len(D)}
+    L.append(f"- Ib: \|C-1 top-10 test 순도 − T23b u_10\| 최대 {G['Ib_max_absdiff']} ({G['Ib_n']}개). Id: {idok}. Ie: 유한 {G['Ie_finite']}, 회귀 미수렴 {nconv}개.")
+    open(os.path.join(ROOT, "reports", "T23c_summary.md"), "w").write("\n".join(L) + "\n")
+    G["Id_n_class_cand"] = [list(x) for x in G["Id_n_class_cand"]]
+    json.dump({"S": S, "P": {p: ok for p, _, ok, _ in P}, "gates": G}, open(os.path.join(OUT, "judgements_c.json"), "w"), indent=1, ensure_ascii=False)
+    print(json.dumps(S, ensure_ascii=False), {p: ok for p, _, ok, _ in P}, json.dumps(G))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "a-run":
