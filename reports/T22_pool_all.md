@@ -31,7 +31,7 @@
 | Gb | (셀, seed) 60개 × 설정 7개: `eval_logits.npz`(전 에폭)·`fixed_eval_logits.npz` 에피소드 키 불일치 0 |
 | Gc | `ckpt_recheck` `epoch == ckpt_epoch`, 50/50: 420/420 |
 | Gd | `config.pres_pool`·`pres_lambda`가 설정 이름과 일치, λ > 0 run의 `pres_loss` = infonce, 에폭별 `pres_loss_mean` 유한: 실패 0 |
-| Ge | 부기 커밋에 기록 |
+| Ge | `git diff --stat 84c3522 504b0d0`: 4개 파일(`tools/run_t22.py`, `tools/analyze_t22.py`, `reports/T22_pool_all.md`, `reports/T22_summary.md`), 569줄 추가, 삭제 0. 충족 |
 | Gf | 셀별 \|T22 nb − T10r\| = 0.006 / 0.002 / 0.014 / 0.000 / 0.000 / 0.002 %p (clothing 1, 5 / dblp 1, 5 / electronics 1, 5). 충족 |
 
 ### 선택 λ (nb / all)
@@ -69,7 +69,7 @@
 | 420 run, 모든 run에 `--pres_pool` 명시 | 420/420, Gd 통과 | 예 |
 | seed 0–2 `--dump_emb` | `emb_best.npy` 126개 | 예 |
 | 표 T1–T5 | `reports/T22_summary.md` | 예 |
-| 게이트 Ha–Gf | 전부 충족(Ge는 부기 커밋) | 예 |
+| 게이트 Ha–Gf | 전부 충족 | 예 |
 | K1–K6, P112–P115 대조 | 위 표 | 예 |
 | 실행 시간·디스크 기록 | 2절 | 예 |
 | `results/T22/` 유지 | 지우지 않음 | 예 |
@@ -81,3 +81,9 @@
 3. `base`는 지시서대로 `--pres_pool nb`를 명시했다. λ = 0이라 풀을 만들지 않는다(`model.py:76`).
 4. 선택 λ가 격자 끝(10 또는 100)인 셀: nb 3개(clothing 1 = 10, dblp 5 = 10, electronics 1 = 100), all 5개(clothing 1, clothing 5, dblp 1, dblp 5 = 10, electronics 1 = 100). 표 T1의 ‡.
 5. F(cfg) 온도 격자 끝 최적값 run 0개.
+
+## 부기 (2026-10-15, push)
+
+- 보고서 커밋 `504b0d0`, 태그 `t22`. `git push origin pool_all` → `* [new branch] pool_all -> pool_all`, `git push origin t22` → `* [new tag] t22 -> t22`. `git ls-remote`: `refs/heads/pool_all` = `refs/tags/t22` = `504b0d0`. 강제 푸시 없음.
+- `pool_all` push로 그 조상 커밋 `e9af265`(CLAUDE.md 수정), `112e432`(T22_CLAUDE_md_edits.md 추적 해제)도 원격에 올라갔다. 원격 `erasure_ladder` 브랜치는 `f300522` 그대로다(갱신하지 않음).
+- Ge: `git diff --stat 84c3522 504b0d0` = `reports/T22_pool_all.md`, `reports/T22_summary.md`, `tools/analyze_t22.py`, `tools/run_t22.py`. 범위 안.
