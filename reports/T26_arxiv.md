@@ -84,3 +84,8 @@
 9. `ckpt_best.pt`에서 다시 계산한 임베딩·점수와 저장본의 \|Δ\| 최대 2.4e-7. `ckpt_best.pt`의 episode는 6/6 `run.json` best 에피소드와 같다.
 10. 그림은 한글 글꼴이 없어 축·눈금 문자를 영어로 적었다. y축은 최소값 − 8에서 시작한다.
 11. Jb(합성 점검)는 리포 밖 `/tmp/gpn_upstream`의 업스트림 원문을 읽어 실행한다(T24와 같음).
+
+## 부기 (2026-10-18, push)
+
+- 보고서 커밋 `ccaabef`, 태그 `t26`. `git push origin dim_control` → `e350ce7..ccaabef  dim_control -> dim_control`, `git push origin t26` 후 `git ls-remote`: `refs/heads/dim_control` = `refs/tags/t26` = `ccaabef`. 강제 푸시 없음.
+- Je: `git diff --stat e350ce7 ccaabef` = `reports/T26_arxiv.md`, `reports/T26_ladder.png`, `reports/T26_summary.md`, `tools/analyze_t26.py`, `tools/run_t26.py`(5개 파일, 647줄 추가, 삭제 0). 범위 안.
