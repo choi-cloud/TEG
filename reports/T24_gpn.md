@@ -152,3 +152,9 @@
 9. 표 T2의 "논문 보고값" 열은 지시서대로 비워 두었다.
 10. 그림은 한글 글꼴이 없어 축·눈금 문자를 영어로 적었다(G = "GPN", S3 = "TEG"). y축은 패널별 최소값 − 8에서 시작한다(T21 그림과 같은 형식).
 11. Hc 합성 점검은 `/tmp/gpn_upstream`의 업스트림 원문을 읽어 실행한다. 이 경로는 리포 밖이다.
+
+## 부기 (2026-10-18, push)
+
+- 보고서 커밋 `553424c`, 태그 `t24`. `git push origin gpn_backbone` → `* [new branch] gpn_backbone -> gpn_backbone`, `git push origin t24` → `* [new tag] t24 -> t24`. `git ls-remote`: `refs/heads/gpn_backbone` = `refs/tags/t24` = `553424c`. 강제 푸시 없음.
+- Hf: `git diff --stat 1f2265d 553424c` = `reports/T24_gpn.md`, `reports/T24_ladder.png`, `reports/T24_summary.md`, `tools/analyze_t24.py`, `tools/gpn/UPSTREAM.md`, `tools/gpn/layers.py`, `tools/gpn/models.py`, `tools/run_t24.py`(8개 파일, 1015줄 추가, 삭제 0). 범위 안.
+- `gpn_backbone` push로 조상 커밋 `9d8cf08`–`1d83ffc`(T23)와 H0 `1f2265d`도 원격 브랜치 `gpn_backbone`에 포함됐다.
