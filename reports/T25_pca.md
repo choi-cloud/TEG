@@ -74,3 +74,8 @@
 4. S0·P64·P16의 pur_test seed 간 sd가 0.0000이다. 세 표현이 분할과 무관하고 test 클래스 집합이 seed 0–2에서 같다(T21 이상 징후 7과 같은 사정).
 5. `diffusion_features_hops`가 내부의 `utils.load_data`로 분석 프로세스의 전역 `random`을 소비한다(T21과 같은 기존 경로).
 6. `analyze_t24.fewshot_acc_euc`를 import하면서 `run_t24`(→ `tools/gpn/models.py`)도 불러온다. GPN 코드는 실행하지 않는다.
+
+## 부기 (2026-10-18, push)
+
+- 보고서 커밋 `540bc3b`, 태그 `t25`. `git push origin dim_control` → `* [new branch] dim_control -> dim_control`, `git push origin t25` → `* [new tag] t25 -> t25`. `git ls-remote`: `refs/heads/dim_control` = `refs/tags/t25` = `540bc3b`. 강제 푸시 없음.
+- Id: `git diff --stat 59708da 540bc3b` = `reports/T25_pca.md`, `reports/T25_summary.md`, `tools/analyze_t25.py`(3개 파일, 392줄 추가, 삭제 0). 범위 안.
