@@ -88,6 +88,8 @@ S0·D·P16·G·GPN 출력의 정의는 T26과 같다(S0 = 행 L2 정규화(adj²
 | Kg 변경 범위 | `git diff --stat <H0> <보고서 커밋>` = `tools/run_t27.py`, `tools/analyze_t27.py`, `reports/T27_*`뿐 | 보고서 쓰고 태그 없음 |
 | Kh 유한 | 지표 유한, `emb_best.npy`에 NaN 없음 | 해당 run 제외, 기록 |
 
+2026-10-18 부기: Kd2의 1e-5 절대 기준은 float32에서 |값| 최대 70인 출력에 맞지 않았다. Kd2를 'float64로 계산한 GCNConv(단위 가중치) X와 Â_in X의 |Δ|max ≤ 1e-8'로 바꾼다. float32 |Δ|max와 상대 차이는 기록만 한다. 이에 따라 Kg 허용 목록에 이 지시서 파일(부기만)을 추가한다.
+
 ## 8. 보고
 
 - `reports/T27_arxiv_teg.md`(§6 형식), `reports/T27_summary.md`, `reports/T27_ladder.png`.
