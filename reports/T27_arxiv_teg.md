@@ -106,3 +106,8 @@
 8. S0·P64의 순도 sd 0.0000: 클래스 분할과 두 표현이 seed와 무관하다.
 9. T2 아래 참고값은 VISION 논문 표의 TEG(5w5s 62.07 ± 1.72)이며, 클래스 분할·에피소드 프로토콜이 다를 수 있다.
 10. 그림은 한글 글꼴이 없어 축·눈금 문자를 영어로 적었다. y축은 최소값 − 8에서 시작한다.
+
+## 부기 (2026-10-18, push)
+
+- 보고서 커밋 `3e806cf`, 태그 `t27`. `git push origin dim_control` → `e698d0b..3e806cf  dim_control -> dim_control`, `git push origin t27` → `* [new tag] t27 -> t27`. `git ls-remote`: `refs/heads/dim_control` = `refs/tags/t27` = `3e806cf`. 강제 푸시 없음.
+- Kg: `git diff --stat a3d4804 3e806cf` = `instructions/T27_arxiv_teg.md`(+2, 부기), `reports/T27_arxiv_teg.md`, `reports/T27_ladder.png`, `reports/T27_summary.md`, `tools/analyze_t27.py`, `tools/run_t27.py`(6개 파일, 663줄 추가, 삭제 0). 부기 기준 허용 목록 안.
