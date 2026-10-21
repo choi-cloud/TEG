@@ -78,3 +78,8 @@ T3(3분위 교차표), T4(TEG − D 최저·최고 클래스), T5(기준값)는 
 5. **승인된 판단 1–4:** 3분위는 `np.quantile(·, 1/3)` 이하(경계 포함). Spearman은 `scipy.stats.spearmanr`(양측 p)로 그 칸의 test 클래스 전체에 계산했다. T1의 분명한 음수·양수는 클래스별 `paired` 결과로 셌다. `classwise_decomp`는 보고서 커밋과 함께 push했다.
 6. **e_c·r_c와 shot:** e_c·r_c는 분할과 특징에만 의존하므로 같은 데이터셋의 1·5-shot에서 같다.
 7. **착수 전 작업 트리:** §1-1 확인 때 `docs/dual_view_closing_note.md`, `docs/dual_view_rehearsed_trust_methodology_v0.1.md`의 삭제가 stage되어 있었다. 사용자가 파일을 복구했고(blob이 HEAD와 같음), 사용자 지시로 `git restore --staged`를 실행했다. 두 파일은 수정·삭제·커밋하지 않았다.
+
+## 부기 (2026-10-21, push)
+
+- 보고서 커밋 `4a99367`, 태그 `t30`(→ `4a99367`), `origin/classwise_decomp`(새 브랜치)와 태그 push 완료. force 없음.
+- Gd 확인값: `git diff --stat 9fb9611 4a99367` = `reports/T30_classwise.md`(80+), `reports/T30_per_class.md`(209+), `reports/T30_summary.md`(174+), `tools/analyze_t30.py`(381+), 4 files.
