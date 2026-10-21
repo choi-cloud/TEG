@@ -82,3 +82,9 @@ T3(기록, 표현 수준 probe)는 `reports/T28_summary.md`에 있다.
 1. **Gb 비교 방식:** T22 표 T2의 값이 소수 둘째 자리까지라서 비교 대상은 반올림된 값이다. T22의 D는 `evaluate_npz`의 `acc_D`(s·cos의 log_softmax argmax)이고, T28의 D는 `cosine_probe_acc`(cos argmax)이다. 18값 모두 \|Δ\| ≤ 0.004로 기준 안이다.
 2. **T3 probe 분할 (승인된 판단 1):** T21과 같이 T09 `base`의 `split.json`·`labels.npy`(seed 0–2)를 썼다.
 3. **에피소드 순서:** 모든 고정 test 에피소드에서 `query_y`가 클래스 순(0,…,0,1,…,4)임을 확인했다. `cosine_probe_acc`는 이 순서를 전제로 한다.
+
+## 부기 (2026-10-21, push)
+
+- 보고서 커밋 `4100884`, 태그 `t28`(→ `4100884`), `origin/trainfree_baselines`와 태그 push 완료. force 없음.
+- Gd 확인값: `git diff --stat 2967476 4100884` = `reports/T28_summary.md`(102+), `reports/T28_xproto.md`(84+), `tools/analyze_t28.py`(229+), 3 files.
+- 이 부기는 T29 He(`git diff --stat t28 <T29 보고서 커밋>`)의 범위 밖에 두기 위해 T29 태그 뒤에 커밋했다.

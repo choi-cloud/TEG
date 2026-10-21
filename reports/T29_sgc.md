@@ -78,3 +78,8 @@ T1 — 고정 test 정확도 (seed 0–9, 각 200 에피소드, seed 평균 ± s
 5. **D 계산 확인:** D와 SGC-P의 예측은 코드 안에서 코사인 argmax로 계산했다. 에피소드 정확도가 `fusion_baseline.cosine_probe_acc`와 같은지 assert로 확인했다(모든 프로세스 통과).
 6. **T4 비교 조건:** 예비 실험은 분할(`random.seed(seed)` valid 추출), query 수(클래스당 20), 에피소드(`random.Random(1000 + seed)`), 난수 오프셋(사전학습 18000/18300, SGC-S 18400 + 1000·seed + e)이 이 실행과 다르다.
 7. **복원 분할의 base 클래스 수:** Clothing 40, dblp 80, Electronics 91이고 seed 0–9에서 같다.
+
+## 부기 (2026-10-21, push)
+
+- 보고서 커밋 `17c331a`, 태그 `t29`(→ `17c331a`), `origin/trainfree_baselines`와 태그 push 완료. force 없음.
+- He 확인값: `git diff --stat 4100884 17c331a` = `reports/T29_sgc.md`(80+), `reports/T29_summary.md`(130+), `tools/analyze_t29.py`(182+), `tools/run_t29.py`(323+), 4 files.
