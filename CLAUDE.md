@@ -1,4 +1,4 @@
-# CLAUDE.md — TEG 기반 GFSL 실험 리포 (2026-10-01 제정, 2026-10-08 개정, 2026-10-11 추가 개정, 2026-10-14 추가 개정, 2026-10-15 추가 개정, 2026-10-15 2차 개정(T23), 2026-10-16 개정(T24),2026-10-18 개정(T25·T26), 2026-10-18 2차 개정(T27))
+# CLAUDE.md — TEG 기반 GFSL 실험 리포 (2026-10-01 제정, 2026-10-08 개정, 2026-10-11 추가 개정, 2026-10-14 추가 개정, 2026-10-15 추가 개정, 2026-10-15 2차 개정(T23), 2026-10-16 개정(T24),2026-10-18 개정(T25·T26), 2026-10-18 2차 개정(T27), 2026-10-21 개정(T28·T29))
 
 상시 규칙이다. 지시서(`instructions/T*.md`)가 이 파일과 어긋나면 지시서가 우선하되, §7 "하지 말 것"은 지시서로도 풀리지 않는다.
 
@@ -17,6 +17,7 @@
   - 정리 문서: `docs/T07_실험_정리_문서.md`, `docs/T09-T13_실험_정리_문서.md`(DRAFT).
   - T25–T26: 차원 대조. T25 = Â²X의 PCA(16·64)와 학습한 임베딩 비교(학습 없음). T26 = ogbn-arxiv(입력 128차원)에서 D vs GPN. 큐 instructions/T25_T26_QUEUE.md.
   - T27: ogbn-arxiv에서 TEG 원본 vs D·GPN. 표현 수준은 T26 probe 에피소드, 출력 수준은 TEG 고정 test 에피소드에서 세 방법 비교.
+  - T28–T29: 학습 없는 기준선. T28 = 순수 X·ÂX·Â²X 프로토타입(10/19 피드백 F1). T29 = 발표된 SGC 기준선의 세 변형(SGC 프로토타입 / support만 학습 / base 사전학습 → support 재학습, 10/19 피드백 F3). TEG·GPN 학습 없음, T22 고정 test 에피소드 재사용. 큐 instructions/T28_T29_QUEUE.md.
 
 - **현재 문제 의식 (2026-10-08)**
   1. base 클래스로만 에피소드 지도 학습을 하면, 인코더는 **학습에 쓰지 않은 클래스(valid·test)** 의 구분력을 잃는다. 입력(ÂX, Â²X)에는 구분 정보가 있다.
@@ -35,7 +36,7 @@
   - TEG 명세는 torch 1.10.1 / PyG 2.0.3이다. 버전 차이를 알고 쓴다.
 - **데이터**: `dataset/`(gitignore). 대상은 `Amazon_clothing`, `Amazon_electronics`, `dblp`.
 - **결과**: `results/<지시서>/...`(gitignore). 요약표와 보고서는 `reports/`(커밋).
-- **브랜치 (2026-10-18)**
+- **브랜치 (2026-10-21)**
 
   | 브랜치 | 상태 |
   |---|---|
@@ -48,11 +49,14 @@
   | `pool_all` | T22에서 `erasure_ladder` HEAD로부터 생성. 대조 풀 all 재실행. t22 완료(`504b0d0`, 부기 `199efae`) |
   | `hier_purity` | T23a에서 `pool_all` HEAD로부터 생성. 다중 해상도 클러스터 분석. t23a·t23b·t23c 완료(`1d83ffc`). 보류(다음 미팅 논의) | 
   | `gpn_backbone` | T24에서 `hier_purity` HEAD `1d83ffc`로부터 생성. GPN 백본 지움 재현. t24 완료(`553424c`, 부기 `95e3647`) |
-  | `dim_control` | T25에서 `gpn_backbone` HEAD `95e3647`로부터 생성. 차원 대조(T25 PCA, T26 ogbn-arxiv). t25·t26 완료(큐 요약 e698d0b). T27(ogbn-arxiv TEG) |
+  | `dim_control` | T25에서 `gpn_backbone` HEAD `95e3647`로부터 생성. 차원 대조(T25 PCA, T26 ogbn-arxiv). t25·t26 완료(큐 요약 `e698d0b`). t27 완료(`3e806cf`, 부기 `d2f0f22`)|
+  | `trainfree_baselines` | T28에서 `dim_control` HEAD `d2f0f22`로부터 생성. 학습 없는 기준선(T28 X 프로토타입, T29 SGC 세 변형) |
 
-- **태그**: `t01`, `t02`, `t03a`, `t03b`, `t04`, `t05`, `t06`, `t06b`, `t07`, `t08`, `t08b`, `t09`, `t10r`, `t12`, `t13`, `t14`, `t15`, `t19a`, `t19b`, `t21`, `t22`, `t23a`, `t23b`, `t23c`, `t24`, `t25`, `t26`
-  `t16a`는 G3(c) 실패로 달지 않았다(보류). 다음 태그는 t27.
-- **번호**: T16a(구현·동적 사실, G3(c) 실패), T16b(주체 진단), T17(TLP식 기준선), T18(조건, 선택). T16b–T18은 보류. 사전 등록 P85–P99는 이 지시서들에 있다. T19a(E1 pseudo-class 순도)와 T19b(E2 센서 타당성)의 사전 등록은 P100–P106. T21(지움의 사다리)은 P107–P111. T22(대조 풀 all)는 P112–P115. T23b는 P116–P120, T23c는 P121–P125.  T24(GPN 백본)는 P126–P130. T25(PCA 대조)는 P131–P134, T26(ogbn-arxiv)은 P135–P138. T27(ogbn-arxiv TEG)은 P139–P143. 다음 사전 등록 번호는 **P144**.
+  - 표 밖 브랜치 `main`, `HT_01`, `dual_view_trust`, `novel_like_class`: 이 지시서 계열이 아니다. 읽기만 하고 체크아웃·커밋·병합하지 않는다.
+
+- **태그**: `t01`, `t02`, `t03a`, `t03b`, `t04`, `t05`, `t06`, `t06b`, `t07`, `t08`, `t08b`, `t09`, `t10r`, `t12`, `t13`, `t14`, `t15`, `t19a`, `t19b`, `t21`, `t22`, `t23a`, `t23b`, `t23c`, `t24`, `t25`, `t26`, `t27`
+  `t16a`는 G3(c) 실패로 달지 않았다(보류). 다음 태그는 t28.
+- **번호**: T16a(구현·동적 사실, G3(c) 실패), T16b(주체 진단), T17(TLP식 기준선), T18(조건, 선택). T16b–T18은 보류. 사전 등록 P85–P99는 이 지시서들에 있다. T19a(E1 pseudo-class 순도)와 T19b(E2 센서 타당성)의 사전 등록은 P100–P106. T21(지움의 사다리)은 P107–P111. T22(대조 풀 all)는 P112–P115. T23b는 P116–P120, T23c는 P121–P125.  T24(GPN 백본)는 P126–P130. T25(PCA 대조)는 P131–P134, T26(ogbn-arxiv)은 P135–P138. T27(ogbn-arxiv TEG)은 P139–P143. T28(X 프로토타입)은 P144–P146, T29(SGC 세 변형)는 P147–P151. 다음 사전 등록 번호는 **P152**..
 
 ## 2. 작업 단위와 진행 규약
 
@@ -151,6 +155,9 @@
   | G (T24) | GPN 공식 인코더(GCN 2층, 16차원)의 best-valid 출력 `results/T24/gpn/.../emb_best.npy`. "GPN 출력"은 valuator 가중 prototype + 유클리드 분류 |
   | P16 / P64 (T25) | S0(행 정규화 Â²X)의 PCA 16 / 64차원 점수. 전체 노드에 레이블 없이 적합 |
   | S0 (T26, ogbn-arxiv) | `load_data("ogbn-arxiv")`의 행 정규화 adj로 2-hop 전파한 X를 행 L2 정규화. S0_sym은 대칭 gcn_norm 판(기록) |
+  | C_all (T28·T29) | T22 선택 λ `infonce_all`의 고정 test 출력(재사용 열 이름) |
+  | X0 / X1 (T28) | 행 L2 정규화 X / ÂX (`fusion_baseline.diffusion_features_hops(ds, 0 / 1)`) 위 코사인 프로토타입 |
+  | SGC-P / SGC-S / SGC-B (T29) | Â²(행 L1 X) 위 코사인 프로토타입 / 무작위 초기화 선형층을 support로 학습 / base 사전학습 선형층을 support로 재학습. 선형층 설정은 Meta-GNN 공개 코드(Adam lr 0.2, wd 5e-6, 100 에폭) |
 
 - **클래스 그룹**
   - base: 학습 에피소드에 쓰는 클래스
@@ -193,7 +200,11 @@
   | 18300 | T24·T26 GPN 모델 초기화 |
   | 18400 | 미배정 |
   | 18500 | T25·T26 PCA(sklearn random_state) |
-  | 18600 이후 | 미배정 |
+  | 18600 | T29 SGC-B 사전학습 클래스·노드 추출(`random.Random`) |
+  | 18700 | T29 SGC-B 사전학습 선형층 초기화(`torch.Generator`) |
+  | 18800 | T29 SGC-S 1-shot 에피소드별 초기화 |
+  | 18900 | T29 SGC-S 5-shot 에피소드별 초기화 |
+  | 19000 이후 | 미배정 |
 
   - 등록부 밖의 기존 값: `utils.py` 원본 seed(TEG 원본 동작), `analyze_t06b.py` PCA `random_state=0`(T06b 기록값). 새 코드에서는 쓰지 않는다.
   - 새 코드는 등록부에 없는 오프셋을 쓰지 않는다. 새로 쓸 오프셋은 지시서에 명시한 뒤 여기에 추가한다.
